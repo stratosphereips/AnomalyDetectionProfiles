@@ -124,6 +124,42 @@ class MultiProtocolTests(unittest.TestCase):
             self.assertEqual(events[0]["protocols"], ["dns", "http"])
             self.assertEqual(events[0]["global_score"], 0.75)
 
+    def test_target_anomalies_contribute_to_global_ensemble(self):
+        with tempfile.TemporaryDirectory() as temp:
+            output = Outputs(Path(temp), quiet=True)
+            detector = MultiProtocolDetector(arguments(), output)
+            detector.target_anomalies = [
+                {
+                    "event": "target_anomaly",
+                    "target": "37.48.125.108",
+                    "hour_start": 3600,
+                    "normalized_score": 0.40,
+                    "score": 4.0,
+                    "reasons": [{"feature": "incoming_flow_count"}],
+                    "responsible_flow_count": 0,
+                    "responsible_flows": [],
+                }
+            ]
+            detector.protocol_anomalies = [
+                {
+                    "event": "protocol_anomaly",
+                    "host": "37.48.125.108",
+                    "hour_start": 3600,
+                    "protocol": "dns",
+                    "normalized_score": 0.30,
+                    "score": 3.0,
+                    "reasons": [{"feature": "flow_count"}],
+                    "responsible_flow_count": 0,
+                    "responsible_flows": [],
+                }
+            ]
+            events = detector.ensemble()
+            output.close()
+            self.assertEqual(len(events), 1)
+            self.assertEqual(events[0]["host"], "37.48.125.108")
+            self.assertEqual(events[0]["protocols"], ["dns", "target:37.48.125.108"])
+            self.assertEqual(len(events[0]["target_anomalies"]), 1)
+
     def test_low_sensitivity_suppresses_same_protocol_vote(self):
         with tempfile.TemporaryDirectory() as temp:
             output = Outputs(Path(temp), quiet=True)
