@@ -582,7 +582,7 @@
     $("selectFolder").addEventListener("click",()=>{ $("zeekPath").value=state.browsePath; $("browser").close(); inspectFolder(); if($("autoRun").checked) runAnalysis(); });
     document.querySelectorAll(".tab").forEach(tab=>tab.addEventListener("click",()=>{ document.querySelectorAll(".tab").forEach(x=>x.classList.remove("active")); tab.classList.add("active"); state.tab=tab.dataset.tab;
       if (state.ranking[state.tab]) $("rankingMetric").value=state.ranking[state.tab]; renderResults(); }));
-    ["search","hostFilter","protocolFilter"].forEach(id=>$(id).addEventListener(id==="search"?"input":"change",renderResults));
+    ["search","hostFilter","targetFilter","protocolFilter"].forEach(id=>$(id).addEventListener(id==="search"?"input":"change",renderResults));
     $("minimumImportance").addEventListener("change",renderResults);
     $("rankingMetric").addEventListener("change",()=>{ state.ranking[state.tab]=$("rankingMetric").value; renderResults(); });
     init().then(inspectFolder).catch(error=>showError(error.message));
