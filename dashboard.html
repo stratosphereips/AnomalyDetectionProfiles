@@ -154,7 +154,7 @@
 
   <div class="layout">
     <aside>
-      <div class="section-title"><span>Detection configuration</span><button id="resetBtn">Reset</button></div>
+      <div class="section-title"><span>Detection configuration</span><span><button id="saveConfigBtn">Save conf</button><button id="resetBtn">Reset</button></span></div>
       <div id="controls"></div>
       <div class="section-title"><span>Anomaly importance</span></div>
       <div class="importance-box">
@@ -386,8 +386,14 @@
         kind === "target" ? `Target-IP anomaly · ${row.target || row.host}` :
         kind === "flow" ? `SSL flow alert · ${row.server || row.responsible_flows?.[0]?.details?.server || "unknown server"}` :
         kind === "data" ? `${protocol} hourly data · ${row.host || row.target}` : `${protocol} protocol-hour · ${row.host}`;
-      const reasons = row.reasons || row.protocol_anomalies?.flatMap(x=>
-        x.reasons.map(reason=>({...reason, source_protocol:x.protocol}))) || [];
+      const reasons = row.reasons || [
+        ...(row.protocol_anomalies || []).flatMap(x =>
+          x.reasons.map(reason=>({...reason, source_protocol:x.protocol}))
+        ),
+        ...(row.target_anomalies || []).flatMap(x =>
+          x.reasons.map(reason=>({...reason, source_protocol:"target", target_ip:x.target}))
+        )
+      ];
       const flows = row.responsible_flows || [];
       const flowNotice = kind === "flow"
         ? `<div class="reason"><strong>Support evidence, not an anomaly</strong><p>This SSL flow entry is kept to explain the protocol-hour and global anomalies. It is an alert, not an anomaly class.</p></div>`
@@ -549,6 +555,22 @@
       target.title = `${state.capture.records} timestamped records across ${state.capture.active_traffic_hours} active traffic-hours; traffic-hour span ${state.capture.traffic_hour_span} h`;
     }
 
+    async function saveConfig() {
+      try {
+        const response = await fetch("/api/save-config", {
+          method: "POST",
+          headers: {"Content-Type":"application/json"},
+          body: JSON.stringify({config: state.config}),
+        });
+        const payload = await response.json();
+        if (!response.ok) throw new Error(payload.error || "Could not save configuration");
+        setStatus("ok", `Configuration saved to ${payload.saved}`);
+      } catch (error) {
+        setStatus("error", "Configuration save failed.");
+        showError(error.message);
+      }
+    }
+
     async function inspectFolder() {
       const path = $("zeekPath").value.trim();
       if (!path) return;
@@ -581,6 +603,7 @@
     }
 
     $("runBtn").addEventListener("click", runAnalysis);
+    $("saveConfigBtn").addEventListener("click", saveConfig);
     $("zeekPath").addEventListener("change", inspectFolder);
     $("resetBtn").addEventListener("click", () => { state.config=structuredClone(state.defaults); renderControls(); });
     $("browseBtn").addEventListener("click", async () => { await browse($("zeekPath").value); $("browser").showModal(); });
