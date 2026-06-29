@@ -246,6 +246,88 @@ class MultiProtocolTests(unittest.TestCase):
                 )
             )
 
+    def test_target_ip_hourly_detector_emits_destination_anomaly(self):
+        with tempfile.TemporaryDirectory() as temp:
+            output = Outputs(Path(temp), quiet=True)
+            detector = MultiProtocolDetector(arguments(), output)
+            detector.observe(
+                "conn",
+                {
+                    "ts": "1",
+                    "uid": "C1",
+                    "id.orig_h": "10.0.0.10",
+                    "id.resp_h": "37.48.125.108",
+                    "id.orig_p": "50000",
+                    "id.resp_p": "80",
+                    "orig_bytes": "10",
+                    "resp_bytes": "20",
+                    "conn_state": "SF",
+                },
+                "10.0.0.10",
+                1.0,
+            )
+            detector.observe_target(
+                "conn",
+                {
+                    "ts": "1",
+                    "uid": "C1",
+                    "id.orig_h": "10.0.0.10",
+                    "id.resp_h": "37.48.125.108",
+                    "id.orig_p": "50000",
+                    "id.resp_p": "80",
+                    "conn_state": "SF",
+                },
+                "10.0.0.10",
+                "37.48.125.108",
+                1.0,
+            )
+            for idx, source in enumerate(
+                ["10.0.0.11", "10.0.0.12", "10.0.0.13", "10.0.0.14"],
+                start=2,
+            ):
+                ts = float(3600 + idx)
+                detector.observe(
+                    "conn",
+                    {
+                        "ts": str(ts),
+                        "uid": f"C{idx}",
+                        "id.orig_h": source,
+                        "id.resp_h": "37.48.125.108",
+                        "id.orig_p": str(50000 + idx),
+                        "id.resp_p": "443",
+                        "orig_bytes": str(20 * idx),
+                        "resp_bytes": "0",
+                        "conn_state": "S0",
+                    },
+                    source,
+                    ts,
+                )
+                detector.observe_target(
+                    "conn",
+                    {
+                        "ts": str(ts),
+                        "uid": f"C{idx}",
+                        "id.orig_h": source,
+                        "id.resp_h": "37.48.125.108",
+                        "id.orig_p": str(50000 + idx),
+                        "id.resp_p": "443",
+                        "conn_state": "S0",
+                    },
+                    source,
+                    "37.48.125.108",
+                    ts,
+                )
+            detector.finalize_all()
+            detector.finalize_targets()
+            output.close()
+            self.assertTrue(detector.target_anomalies)
+            event = detector.target_anomalies[0]
+            self.assertEqual(event["type"], "target-hour")
+            self.assertEqual(event["target"], "37.48.125.108")
+            self.assertIn("incoming_flow_count", {r["feature"] for r in event["reasons"]})
+            self.assertGreaterEqual(event["responsible_flow_count"], 1)
+            self.assertTrue(event["responsible_flows"])
+
 
 if __name__ == "__main__":
     unittest.main()

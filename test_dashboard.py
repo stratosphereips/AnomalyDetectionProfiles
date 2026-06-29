@@ -24,6 +24,7 @@ class DashboardTests(unittest.TestCase):
         self.assertIn("grid-template-columns: 360px minmax(0,1fr)", html)
         self.assertIn("Global anomalies", html)
         self.assertIn("Protocol-hour anomalies", html)
+        self.assertIn("Target-IP anomalies", html)
         self.assertIn("SSL flow alerts", html)
         self.assertIn("Support evidence, not an anomaly", html)
         self.assertIn("Documentation", html)
@@ -34,6 +35,7 @@ class DashboardTests(unittest.TestCase):
         self.assertIn("Training, drift, and anomaly timeline", html)
         self.assertIn("Minimum level", html)
         self.assertIn("Composite importance", html)
+        self.assertIn("All target IPs", html)
         self.assertIn("ignore_multicast_broadcast", dashboard.SETTING_METADATA)
         self.assertEqual(
             dashboard.SETTING_METADATA["ignore_multicast_broadcast"][0],

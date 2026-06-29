@@ -67,11 +67,12 @@
     .card { background: var(--panel); border: 1px solid var(--line); border-left: 4px solid var(--amber);
       border-radius: 10px; margin-bottom: 10px; overflow: hidden; box-shadow: 0 8px 22px rgba(0,0,0,.16); }
     .card.flow { border-left-color: var(--red); } .card.global { border-left-color: var(--magenta); }
+    .card.target { border-left-color: var(--cyan); }
     .card.data { border-left-color: var(--blue); }
     .card-head { padding: 13px 15px; display: grid; grid-template-columns: auto 1fr auto; gap: 12px; align-items: center; cursor: pointer; }
     .badge { border-radius: 6px; padding: 4px 8px; font-size: 10px; text-transform: uppercase; letter-spacing: .7px;
       color: #08121f; background: var(--amber); font-weight: 850; }
-    .flow .badge { background: var(--red); } .global .badge { background: var(--magenta); } .data .badge { background: var(--blue); }
+    .flow .badge { background: var(--red); } .global .badge { background: var(--magenta); } .target .badge { background: var(--cyan); } .data .badge { background: var(--blue); }
     .headline { font-weight: 720; } .meta { color: var(--muted); font-size: 12px; }
     .score { text-align: right; font-weight: 820; font-size: 17px; }
     .card-body { display: none; padding: 0 15px 15px; border-top: 1px solid var(--line); }
@@ -353,11 +354,12 @@
       let rows = [...(state.result[map[state.tab]] || [])];
       const q = $("search").value.toLowerCase(), host = $("hostFilter").value, target = $("targetFilter").value, protocol = $("protocolFilter").value;
       const minimumImportance = Number($("minimumImportance").value || 0);
-      rows = rows.filter(row => (!host || (state.tab === "target" ? true : row.host===host)) &&
-        (!target || (state.tab === "target" ? (row.target || row.host)===target : true)) &&
+      const targetScoped = state.tab === "target" || state.tab === "targetdata";
+      rows = rows.filter(row => (!host || (targetScoped ? true : row.host===host)) &&
+        (!target || (targetScoped ? (row.target || row.host)===target : true)) &&
         (!protocol || row.protocol===protocol || (row.protocols||[]).includes(protocol)) &&
         (!q || JSON.stringify(row).toLowerCase().includes(q)) &&
-        (state.tab === "data" || Number(row.importance_score||0) >= minimumImportance));
+        (state.tab === "data" || state.tab === "targetdata" || Number(row.importance_score||0) >= minimumImportance));
       const metric = state.ranking[state.tab] || "total_score";
       rows.sort((a,b) => Number(b[metric] ?? b.total_score ?? b.score ?? 0) - Number(a[metric] ?? a.total_score ?? a.score ?? 0));
       return rows;
@@ -408,7 +410,11 @@
       const direction = reason.direction || "deviation";
       const protocol = reason.source_protocol || reason.protocol;
       const scopedFeature = protocol ? `${protocol}.${reason.feature}` : reason.feature;
-      const scope = reason.source_ip ? ` · IP ${reason.source_ip} · hour ${reason.hour_start}–${Number(reason.hour_start)+Number(reason.window_seconds||3600)-1}` : "";
+      const scope = reason.source_ip
+        ? ` · IP ${reason.source_ip} · hour ${reason.hour_start}–${Number(reason.hour_start)+Number(reason.window_seconds||3600)-1}`
+        : reason.target_ip
+        ? ` · target ${reason.target_ip} · hour ${reason.hour_start}–${Number(reason.hour_start)+Number(reason.window_seconds||3600)-1}`
+        : "";
       return `<div class="reason"><div class="reason-title"><span>${esc(scopedFeature)}</span>
         <span class="${esc(direction)}">${esc(direction)}</span>
         <span class="meta">value ${fmt(reason.value)} · baseline ${fmt(reason.mean)} · z ${fmt(reason.zscore)} · threshold ${fmt(reason.threshold)}${esc(scope)}</span></div>
@@ -453,7 +459,8 @@
         (!protocol || row.protocol===protocol || (row.protocols||[]).includes(protocol));
       const hourly = state.result.hourly_data.filter(matches);
       const targetHourly = state.result.target_hourly_data.filter(matches);
-      const graphRows = hourly.length ? hourly : targetHourly;
+      const preferTarget = state.tab === "target" || state.tab === "targetdata" || Boolean(target);
+      const graphRows = preferTarget && targetHourly.length ? targetHourly : hourly.length ? hourly : targetHourly;
       if (!graphRows.length) {
         $("results").innerHTML = `<div class="empty">No hourly data matches these IP/protocol filters.</div>`; return;
       }
@@ -476,7 +483,7 @@
       }).join(" ");
       const trainingRows = graphRows.filter(x=>x.phase==="training");
       const bandWidth = maximum===minimum ? 80 : Math.max(10,(3600/(maximum-minimum))*1108);
-      const bands = trainingRows.map(row=>`<rect class="training-band" x="${xScale(Number(row.hour_start),minimum,maximum)-bandWidth/2}" y="25" width="${bandWidth}" height="195"><title>Benign warmup hour ${row.hour_start} · protocol ${row.protocol}</title></rect>`).join("");
+      const bands = trainingRows.map(row=>`<rect class="training-band" x="${xScale(Number(row.hour_start),minimum,maximum)-bandWidth/2}" y="25" width="${bandWidth}" height="195"><title>Benign warmup hour ${row.hour_start} · ${row.protocol || "all protocols"}</title></rect>`).join("");
       const volumeDots = sortedVolume.map(([hour,value]) => {
         const x=xScale(hour,minimum,maximum), y=220-(Math.log1p(value)/Math.log1p(maxVolume))*175;
         return `<circle cx="${x}" cy="${y}" r="4" fill="#48a8ff"><title>hour ${hour}: ${value} flows/records</title></circle>`;
