@@ -981,6 +981,11 @@ class MultiProtocolDetector:
                 "protocols": sorted(bucket.protocols),
                 "uids": sorted(bucket.uids),
                 "score": round(score, 3),
+                "normalized_score": round(
+                    min(self.args.protocol_score_cap, score)
+                    / self.args.protocol_score_cap,
+                    4,
+                ),
                 "reasons": reasons,
                 "responsible_flow_count": responsible_count,
                 "responsible_flows": responsible_flows,
@@ -1323,14 +1328,18 @@ class MultiProtocolDetector:
         grouped: dict[tuple[str, int], list[dict[str, Any]]] = defaultdict(list)
         for anomaly in self.protocol_anomalies:
             grouped[(anomaly["host"], anomaly["hour_start"])].append(anomaly)
+        for anomaly in self.target_anomalies:
+            grouped[(anomaly["target"], anomaly["hour_start"])].append(anomaly)
         global_events = []
         for (host, hour), events in sorted(grouped.items()):
-            # At most one capped vote per protocol; avoids volume domination.
+            # At most one capped vote per component; avoids volume domination.
             by_protocol = {
-                event["protocol"]: event
-                for event in sorted(
-                    events, key=lambda item: item["normalized_score"]
-                )
+                (
+                    event.get("protocol")
+                    if "protocol" in event
+                    else f"target:{event.get('target', '?')}"
+                ): event
+                for event in sorted(events, key=lambda item: item["normalized_score"])
             }
             contributions = {
                 protocol: event["normalized_score"]
@@ -1389,6 +1398,20 @@ class MultiProtocolDetector:
                         "responsible_flows": item["responsible_flows"],
                     }
                     for item in by_protocol.values()
+                    if item.get("event") == "protocol_anomaly"
+                ],
+                "target_anomalies": [
+                    {
+                        "target": item["target"],
+                        "score": item["score"],
+                        "reasons": item["reasons"],
+                        "responsible_flow_count": item[
+                            "responsible_flow_count"
+                        ],
+                        "responsible_flows": item["responsible_flows"],
+                    }
+                    for item in by_protocol.values()
+                    if item.get("event") == "target_anomaly"
                 ],
             }
             global_reasons = [
