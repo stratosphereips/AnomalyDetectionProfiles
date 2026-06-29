@@ -12,8 +12,13 @@ from typing import Any, Iterator, Optional
 UNSET_VALUES = {"", "-", "(empty)", None}
 
 
+def is_unset(value: Any) -> bool:
+    """Return whether a scalar value is one of Zeek's unset markers."""
+    return value is None or (isinstance(value, str) and value in UNSET_VALUES)
+
+
 def clean(value: Any) -> str:
-    return "" if value in UNSET_VALUES else str(value)
+    return "" if is_unset(value) else str(value)
 
 
 def number(value: Any, default: float = 0.0) -> float:
@@ -153,6 +158,6 @@ class ZeekReader:
                         )
                     record = dict(zip(fields, line.split(separator)))
                 yield {
-                    key: ("" if value in UNSET_VALUES else value)
+                    key: ("" if is_unset(value) else value)
                     for key, value in record.items()
                 }
