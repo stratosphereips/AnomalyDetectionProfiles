@@ -1,0 +1,591 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Zeek Anomaly Workbench</title>
+  <style>
+    :root {
+      --bg: #07111f; --panel: #0d1b2d; --panel2: #11233a; --line: #233a56;
+      --text: #e8f0fa; --muted: #91a6be; --blue: #48a8ff; --cyan: #35d1d1;
+      --red: #ff657a; --amber: #f5b942; --magenta: #cf7cff; --green: #4ed49b;
+      --shadow: 0 18px 50px rgba(0,0,0,.28);
+    }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; min-height: 100%; background: var(--bg); color: var(--text);
+      font: 14px/1.45 Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+    body { min-width: 1040px; }
+    button, input, select { font: inherit; }
+    header { height: 70px; display: flex; align-items: center; gap: 24px; padding: 0 24px;
+      border-bottom: 1px solid var(--line); background: rgba(7,17,31,.96); position: sticky; top: 0; z-index: 20; }
+    .brand { display: flex; align-items: center; gap: 12px; min-width: 310px; }
+    .brand-mark { width: 38px; height: 38px; border-radius: 11px; display: grid; place-items: center;
+      background: linear-gradient(145deg, var(--blue), #576dff); box-shadow: 0 8px 28px rgba(72,168,255,.28); font-weight: 900; }
+    h1 { font-size: 18px; margin: 0; letter-spacing: .2px; }
+    .subtitle { color: var(--muted); font-size: 12px; }
+    .path-row { flex: 1; display: flex; gap: 8px; }
+    input[type=text] { width: 100%; color: var(--text); background: #091625; border: 1px solid var(--line);
+      border-radius: 8px; padding: 10px 12px; outline: none; }
+    input:focus { border-color: var(--blue); box-shadow: 0 0 0 3px rgba(72,168,255,.12); }
+    button { color: var(--text); border: 1px solid var(--line); background: var(--panel2);
+      border-radius: 8px; padding: 9px 13px; cursor: pointer; white-space: nowrap; }
+    button:hover { border-color: #42688e; background: #18304c; }
+    .run { border: 0; background: linear-gradient(135deg, #208be8, #4a65ee); font-weight: 750; padding: 11px 20px; }
+    .run:disabled { opacity: .55; cursor: wait; }
+    .layout { width: 100%; display: grid; grid-template-columns: 360px minmax(0,1fr); min-height: calc(100vh - 70px); }
+    aside { border-right: 1px solid var(--line); background: #091625; padding: 18px; overflow-y: auto; height: calc(100vh - 70px); position: sticky; top: 70px; }
+    main { min-width: 0; padding: 20px 24px 60px; }
+    .section-title { display: flex; align-items: center; justify-content: space-between; margin: 3px 0 12px;
+      text-transform: uppercase; letter-spacing: 1.4px; color: #afc3d9; font-size: 11px; font-weight: 800; }
+    .control-group { margin-bottom: 22px; }
+    .control { background: var(--panel); border: 1px solid #1d334d; padding: 11px 12px; border-radius: 10px; margin-bottom: 8px; }
+    .control-head { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
+    .control label { font-weight: 680; font-size: 12px; }
+    .control input[type=number], .control select { width: 94px; text-align: right; padding: 6px 7px; color: var(--text);
+      background: #071321; border: 1px solid var(--line); border-radius: 6px; }
+    .help { color: var(--muted); font-size: 11px; margin-top: 5px; }
+    .toggle-row { display: flex; align-items: center; justify-content: space-between; padding: 9px 2px; }
+    input[type=checkbox] { accent-color: var(--blue); width: 16px; height: 16px; }
+    .statusbar { display: flex; align-items: center; gap: 10px; margin-bottom: 18px; min-height: 34px; }
+    .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--muted); }
+    .dot.running { background: var(--amber); animation: pulse 1s infinite; }
+    .dot.ok { background: var(--green); } .dot.error { background: var(--red); }
+    @keyframes pulse { 50% { opacity: .35; } }
+    .summary { display: grid; grid-template-columns: repeat(6, minmax(120px,1fr)); gap: 10px; margin-bottom: 18px; }
+    .metric { background: linear-gradient(150deg, var(--panel), #0b192a); border: 1px solid var(--line);
+      border-radius: 11px; padding: 14px 15px; box-shadow: var(--shadow); }
+    .metric .value { font-size: 25px; font-weight: 820; letter-spacing: -.5px; }
+    .metric .label { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .8px; }
+    .tabs { display: flex; gap: 5px; border-bottom: 1px solid var(--line); margin-bottom: 14px; }
+    .tab { border: 0; border-radius: 7px 7px 0 0; background: transparent; color: var(--muted); padding: 10px 15px; }
+    .tab.active { color: var(--text); background: var(--panel); box-shadow: inset 0 -2px var(--blue); }
+    .count { display: inline-block; margin-left: 6px; min-width: 20px; padding: 1px 6px; border-radius: 20px;
+      background: #1b3452; color: #bed5ec; font-size: 10px; text-align: center; }
+    .toolbar { display: grid; grid-template-columns: minmax(240px,1fr) 180px 180px 180px; gap: 8px; margin-bottom: 12px; }
+    .toolbar select { color: var(--text); background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 9px; }
+    .empty { border: 1px dashed var(--line); border-radius: 12px; padding: 60px 20px; text-align: center; color: var(--muted); }
+    .card { background: var(--panel); border: 1px solid var(--line); border-left: 4px solid var(--amber);
+      border-radius: 10px; margin-bottom: 10px; overflow: hidden; box-shadow: 0 8px 22px rgba(0,0,0,.16); }
+    .card.flow { border-left-color: var(--red); } .card.global { border-left-color: var(--magenta); }
+    .card.data { border-left-color: var(--blue); }
+    .card-head { padding: 13px 15px; display: grid; grid-template-columns: auto 1fr auto; gap: 12px; align-items: center; cursor: pointer; }
+    .badge { border-radius: 6px; padding: 4px 8px; font-size: 10px; text-transform: uppercase; letter-spacing: .7px;
+      color: #08121f; background: var(--amber); font-weight: 850; }
+    .flow .badge { background: var(--red); } .global .badge { background: var(--magenta); } .data .badge { background: var(--blue); }
+    .headline { font-weight: 720; } .meta { color: var(--muted); font-size: 12px; }
+    .score { text-align: right; font-weight: 820; font-size: 17px; }
+    .card-body { display: none; padding: 0 15px 15px; border-top: 1px solid var(--line); }
+    .card.open .card-body { display: block; }
+    .reason { background: #091727; border: 1px solid #1d3653; border-radius: 8px; padding: 10px 12px; margin-top: 10px; }
+    .reason-title { display: flex; gap: 10px; align-items: center; font-weight: 750; }
+    .higher { color: var(--red); } .lower { color: var(--cyan); } .new { color: var(--amber); }
+    .reason p { color: #b4c6d8; margin: 5px 0 0; }
+    .flow-title { margin: 14px 0 8px; color: var(--cyan); font-weight: 760; }
+    .flow-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+    .flow-table th { color: var(--muted); text-align: left; font-weight: 650; padding: 7px; border-bottom: 1px solid var(--line); }
+    .flow-table td { padding: 8px 7px; border-bottom: 1px solid #172b43; vertical-align: top; }
+    code { color: #b8e4ff; background: #071321; padding: 2px 5px; border-radius: 4px; }
+    .details { max-width: 420px; word-break: break-word; color: #b7cbe0; }
+    pre { background: #050d17; border: 1px solid var(--line); border-radius: 8px; padding: 12px; overflow: auto; max-height: 65vh; color: #bcd0e5; }
+    dialog { width: min(820px, 80vw); max-height: 78vh; color: var(--text); background: var(--panel);
+      border: 1px solid var(--line); border-radius: 14px; box-shadow: var(--shadow); padding: 0; }
+    dialog::backdrop { background: rgba(1,8,16,.75); backdrop-filter: blur(3px); }
+    .dialog-head { display: flex; gap: 10px; align-items: center; padding: 15px; border-bottom: 1px solid var(--line); }
+    .dialog-head strong { flex: 1; overflow: hidden; text-overflow: ellipsis; }
+    .folders { padding: 10px; max-height: 55vh; overflow-y: auto; }
+    .folder { width: 100%; display: flex; justify-content: space-between; border: 0; background: transparent; padding: 10px 12px; }
+    .folder:hover { background: #162a43; } .zeek-tag { color: var(--green); font-size: 11px; }
+    .dialog-foot { display: flex; justify-content: flex-end; gap: 8px; padding: 12px 15px; border-top: 1px solid var(--line); }
+    .errorbox { background: rgba(255,101,122,.12); border: 1px solid rgba(255,101,122,.4); color: #ffacb8;
+      padding: 12px; border-radius: 8px; margin-bottom: 14px; display: none; white-space: pre-wrap; }
+    .reference { margin-top: 6px; color: var(--cyan); font-size: 10px; font-weight: 750; white-space: nowrap; }
+    .reference-block { margin-top: 2px; }
+    .score-label { color: var(--muted); font-size: 10px; text-transform: uppercase; letter-spacing: .7px; margin-bottom: 2px; }
+    .importance-box { background: linear-gradient(145deg, #152039, #0d1b2d); border: 1px solid #38496a;
+      border-radius: 11px; padding: 12px; margin-top: 10px; }
+    .importance-box label { display: block; color: #c9d9ea; font-size: 11px; font-weight: 750; margin: 9px 0 5px; }
+    .importance-box select { width: 100%; color: var(--text); background: #071321; border: 1px solid var(--line); border-radius: 7px; padding: 8px; }
+    .importance-pill { display: inline-block; border: 1px solid #694b85; background: rgba(207,124,255,.12);
+      color: #dfaaff; border-radius: 12px; padding: 2px 7px; font-size: 10px; margin-left: 7px; }
+    .importance-low { color: #9fb2c7; border-color: #40536a; background: rgba(145,166,190,.1); }
+    .importance-medium { color: #77c8ff; border-color: #2876a8; background: rgba(72,168,255,.12); }
+    .importance-high { color: #ffd477; border-color: #8d6a22; background: rgba(245,185,66,.12); }
+    .importance-critical { color: #ff91a0; border-color: #984052; background: rgba(255,101,122,.13); }
+    .chart-panel { background: var(--panel); border: 1px solid var(--line); border-radius: 12px;
+      padding: 15px 16px; margin-bottom: 14px; box-shadow: var(--shadow); }
+    .chart-head { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 8px; }
+    .chart-head h2 { margin: 0; font-size: 14px; } .chart-head span { color: var(--muted); font-size: 11px; }
+    .chart { width: 100%; min-height: 260px; display: block; background: #081522; border-radius: 8px; }
+    .chart text { fill: #8fa7c0; font-size: 11px; } .chart .grid { stroke: #1d334c; stroke-width: 1; }
+    .chart .axis { stroke: #45627f; stroke-width: 1; } .chart .training-band { fill: rgba(72,168,255,.13); }
+    .legend { display: flex; flex-wrap: wrap; gap: 14px; margin-top: 9px; color: var(--muted); font-size: 11px; }
+    .legend i { display: inline-block; width: 9px; height: 9px; margin-right: 5px; border-radius: 50%; }
+    .doc-page { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 18px 20px; margin-bottom: 14px; box-shadow: var(--shadow); }
+    .doc-page h1, .doc-page h2, .doc-page h3, .doc-page h4, .doc-page h5, .doc-page h6 { margin: 1.1em 0 .5em; }
+    .doc-page h1 { font-size: 24px; }
+    .doc-page h2 { font-size: 18px; }
+    .doc-page h3 { font-size: 15px; }
+    .doc-page p, .doc-page li, .doc-page blockquote, .doc-page table { color: #c7d5e4; }
+    .doc-page p { margin: .55em 0; }
+    .doc-page blockquote { margin: .7em 0; padding: .2em .9em; border-left: 3px solid var(--cyan); background: rgba(53,209,209,.06); }
+    .doc-page pre { max-height: none; white-space: pre-wrap; }
+    .doc-page code { color: #d4f0ff; }
+    .doc-page table { width: 100%; border-collapse: collapse; margin: .9em 0; }
+    .doc-page th, .doc-page td { border: 1px solid #1d334d; padding: 8px 10px; vertical-align: top; }
+    .doc-page th { background: #0b192a; text-align: left; color: #edf4fb; }
+    .doc-page hr { border: 0; border-top: 1px solid #1d334d; margin: 1.1em 0; }
+    @media (max-width: 1300px) { .summary { grid-template-columns: repeat(3,1fr); } }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="brand">
+      <div class="brand-mark">Z</div>
+      <div><h1>Zeek Anomaly Workbench</h1><div class="subtitle">Unified behavioral detection and flow attribution</div></div>
+    </div>
+    <div class="path-row">
+      <input id="zeekPath" type="text" aria-label="Zeek folder">
+      <button id="browseBtn">Browse folders</button>
+    </div>
+    <label class="toggle-row" title="Rerun 700 ms after a parameter changes"><span>Auto-run</span>&nbsp;<input id="autoRun" type="checkbox"></label>
+    <button id="runBtn" class="run">Run analysis</button>
+  </header>
+
+  <div class="layout">
+    <aside>
+      <div class="section-title"><span>Detection configuration</span><button id="resetBtn">Reset</button></div>
+      <div id="controls"></div>
+      <div class="section-title"><span>Anomaly importance</span></div>
+      <div class="importance-box">
+        <div class="help">Importance affects display and ranking only. It never changes detection.</div>
+        <label for="minimumImportance">Minimum level</label>
+        <select id="minimumImportance">
+          <option value="0">All levels</option>
+          <option value="35">Medium and above</option>
+          <option value="60">High and critical</option>
+          <option value="80">Critical only</option>
+        </select>
+        <label for="rankingMetric">Rank anomalies by</label>
+        <select id="rankingMetric">
+          <option value="importance_score">Composite importance</option>
+          <option value="total_score">Total anomaly score</option>
+          <option value="threshold_excess">Deviation above thresholds</option>
+          <option value="protocol_count">Number of protocols</option>
+          <option value="reason_count">Number of anomalous reasons</option>
+        </select>
+        <div class="help" style="margin-top:9px">Global defaults to composite importance. Flow and protocol-hour views default to total score.</div>
+      </div>
+    </aside>
+    <main>
+      <div class="statusbar"><span id="statusDot" class="dot"></span><span id="statusText">Ready. Select a Zeek folder and run the analysis.</span></div>
+      <div id="errorBox" class="errorbox"></div>
+      <section id="summary" class="summary"></section>
+      <nav class="tabs">
+        <button class="tab" data-tab="graphs">Timeline graphs</button>
+        <button class="tab active" data-tab="global">Global anomalies <span id="globalCount" class="count">0</span></button>
+        <button class="tab" data-tab="protocol">Protocol-hour anomalies <span id="protocolCount" class="count">0</span></button>
+        <button class="tab" data-tab="target">Target-IP anomalies <span id="targetCount" class="count">0</span></button>
+        <button class="tab" data-tab="flow">SSL flow alerts <span id="flowCount" class="count">0</span></button>
+        <button class="tab" data-tab="data">Hourly data <span id="dataCount" class="count">0</span></button>
+        <button class="tab" data-tab="targetdata">Target hourly data <span id="targetDataCount" class="count">0</span></button>
+        <button class="tab" data-tab="log">Run log</button>
+        <button class="tab" data-tab="docs">Documentation</button>
+      </nav>
+      <div class="toolbar" id="toolbar">
+        <input id="search" type="text" placeholder="Filter by IP, protocol, UID, server, reason…">
+        <select id="hostFilter"><option value="">All source IPs</option></select>
+        <select id="targetFilter"><option value="">All target IPs</option></select>
+        <select id="protocolFilter"><option value="">All protocols</option></select>
+      </div>
+      <div id="results"></div>
+    </main>
+  </div>
+
+  <dialog id="browser">
+    <div class="dialog-head"><button id="parentBtn">↑ Parent</button><strong id="browserPath"></strong><button id="closeBrowser">Close</button></div>
+    <div id="folders" class="folders"></div>
+    <div class="dialog-foot"><span id="folderStatus" class="meta"></span><button id="selectFolder" class="run">Select this folder</button></div>
+  </dialog>
+
+  <script>
+    const state = { defaults: null, config: null, result: null, docs: null, tab: "global", browsePath: "", timer: null, running: false, pendingRun: false,
+      ranking: {global:"importance_score", protocol:"total_score", target:"importance_score", flow:"total_score", data:"hour_start", targetdata:"hour_start"} };
+    const $ = id => document.getElementById(id);
+    const esc = value => String(value ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+    const fmt = value => typeof value === "number" ? value.toLocaleString(undefined,{maximumFractionDigits:4}) : String(value ?? "—");
+
+    async function init() {
+      const response = await fetch("/api/config");
+      const payload = await response.json();
+      state.defaults = structuredClone(payload.config);
+      state.config = structuredClone(payload.config);
+      state.metadata = payload.metadata;
+      $("zeekPath").value = payload.default_zeek_dir;
+      try { await loadDocs(); } catch { state.docs = []; }
+      renderControls();
+      renderEmpty();
+    }
+
+    async function loadDocs() {
+      const response = await fetch("/api/docs");
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload.error || "Failed to load documentation");
+      state.docs = payload.documents || [];
+    }
+
+    function renderControls() {
+      const root = $("controls"); root.innerHTML = "";
+      const groups = [
+        ["Core model", ["training_hours","sensitivity","minimum_points","threshold","threshold_quantile"]],
+        ["Input filtering", ["ignore_multicast_broadcast"]],
+        ["Adaptation", ["drift_alpha","suspicious_alpha","adaptation_score"]],
+        ["Global ensemble", ["protocol_score_cap","global_threshold","minimum_protocols","corroboration_bonus","corroboration_bonus_cap"]],
+        ["Specialized SSL", ["ssl_hourly_threshold","ssl_flow_threshold","ssl_novelty_threshold","ssl_baseline_alpha","ssl_max_small_anomalies"]],
+        ["Attribution", ["max_responsible_flows"]]
+      ];
+      const all = {...state.config.common, ...state.config.multi_protocol};
+      for (const [title, keys] of groups) {
+        const group = document.createElement("div"); group.className = "control-group";
+        group.innerHTML = `<div class="section-title"><span>${esc(title)}</span></div>`;
+        keys.forEach(key => {
+          if (!(key in all)) return;
+          const meta = state.metadata[key] || {label:key,help:""};
+          const value = all[key];
+          const control = document.createElement("div"); control.className = "control";
+          const reference = key === "training_hours" ? `<div id="captureReference" class="reference reference-block"></div>` : "";
+          const field = typeof value === "boolean"
+            ? `<select id="cfg-${key}" data-key="${key}"><option value="true" ${value ? "selected" : ""}>Ignore</option><option value="false" ${!value ? "selected" : ""}>Keep</option></select>`
+            : `<input id="cfg-${key}" data-key="${key}" type="number" step="${Number.isInteger(value) ? "1" : (key.includes("alpha") || key.includes("quantile") ? "0.001" : "0.05")}" value="${esc(value)}">`;
+          control.innerHTML = `<div class="control-head"><label for="cfg-${key}">${esc(meta.label)}</label>
+            ${field}</div>
+            ${reference}
+            <div class="help">${esc(meta.help)}</div>`;
+          group.appendChild(control);
+        });
+        root.appendChild(group);
+      }
+      root.querySelectorAll("input").forEach(input => input.addEventListener("change", parameterChanged));
+      updateCaptureReference();
+    }
+
+    function parameterChanged(event) {
+      const key = event.target.dataset.key;
+      const raw = event.target.value;
+      const current = state.config.common[key];
+      const value = typeof current === "boolean" ? raw === "true" : Number(raw);
+      const section = key in state.config.common ? "common" : "multi_protocol";
+      state.config[section][key] = value;
+      if ($("autoRun").checked) {
+        clearTimeout(state.timer);
+        state.timer = setTimeout(runAnalysis, 700);
+      }
+    }
+
+    async function runAnalysis() {
+      clearTimeout(state.timer);
+      if (state.running) { state.pendingRun = true; return; }
+      const path = $("zeekPath").value.trim();
+      if (!path) return showError("Select a Zeek folder first.");
+      state.running = true;
+      $("runBtn").disabled = true;
+      $("runBtn").textContent = "Analyzing…";
+      setStatus("running", "Running detector with the current parameters…");
+      $("errorBox").style.display = "none";
+      try {
+        const response = await fetch("/api/run", {method:"POST", headers:{"Content-Type":"application/json"},
+          body: JSON.stringify({zeek_dir:path, config:state.config})});
+        const payload = await response.json();
+        if (!response.ok) throw new Error(payload.error || "Analysis failed");
+        state.result = payload;
+        setStatus("ok", `Run ${payload.run_id} completed in ${payload.elapsed_seconds}s · output ${payload.output_dir}`);
+        renderAll();
+      } catch (error) {
+        setStatus("error", "Analysis failed.");
+        showError(error.message);
+      } finally {
+        state.running = false;
+        $("runBtn").disabled = false;
+        $("runBtn").textContent = "Run analysis";
+        if (state.pendingRun) {
+          state.pendingRun = false;
+          runAnalysis();
+        }
+      }
+    }
+
+    function setStatus(kind, text) { $("statusDot").className = `dot ${kind}`; $("statusText").textContent = text; }
+    function showError(text) { $("errorBox").textContent = text; $("errorBox").style.display = "block"; }
+
+    function renderAll() {
+      const r = state.result, s = r.summary || {};
+      state.capture = r.capture || state.capture;
+      const metrics = [
+        ["Records", s.records_processed || 0, "blue"], ["Source IPs", s.hosts || 0, "cyan"],
+        ["SSL flow alerts", s.ssl_flow_alerts || 0, "red"], ["Protocol-hour", s.protocol_anomalies || 0, "amber"],
+        ["Target anomalies", s.target_anomalies || 0, "cyan"], ["Global anomalies", s.global_anomalies || 0, "magenta"]
+      ];
+      $("summary").innerHTML = metrics.map(([label,value,color]) =>
+        `<div class="metric"><div class="value" style="color:var(--${color})">${fmt(value)}</div><div class="label">${esc(label)}</div></div>`).join("");
+      $("globalCount").textContent = r.global_anomalies.length;
+      $("protocolCount").textContent = r.protocol_anomalies.length;
+      $("targetCount").textContent = r.target_anomalies.length;
+      $("flowCount").textContent = r.flow_anomalies.length;
+      $("dataCount").textContent = r.hourly_data.length;
+      $("targetDataCount").textContent = r.target_hourly_data.length;
+      populateFilters();
+      updateCaptureReference();
+      renderResults();
+    }
+
+    function populateFilters() {
+      const all = [...state.result.global_anomalies,...state.result.protocol_anomalies,...state.result.target_anomalies,...state.result.flow_anomalies,...state.result.hourly_data,...state.result.target_hourly_data];
+      const hosts = [...new Set([...state.result.global_anomalies,...state.result.protocol_anomalies,...state.result.flow_anomalies,...state.result.hourly_data].map(x=>x.host).filter(Boolean))].sort();
+      const targets = [...new Set([...state.result.target_anomalies,...state.result.target_hourly_data].map(x=>x.target || x.host).filter(Boolean))].sort();
+      const protocols = [...new Set(all.flatMap(x=>x.protocols || [x.protocol]).filter(Boolean))].sort();
+      $("hostFilter").innerHTML = `<option value="">All source IPs</option>` + hosts.map(x=>`<option>${esc(x)}</option>`).join("");
+      $("targetFilter").innerHTML = `<option value="">All target IPs</option>` + targets.map(x=>`<option>${esc(x)}</option>`).join("");
+      $("protocolFilter").innerHTML = `<option value="">All protocols</option>` + protocols.map(x=>`<option>${esc(x)}</option>`).join("");
+    }
+
+    function currentRows() {
+      if (!state.result) return [];
+      const map = {global:"global_anomalies",protocol:"protocol_anomalies",target:"target_anomalies",flow:"flow_anomalies",data:"hourly_data",targetdata:"target_hourly_data"};
+      let rows = [...(state.result[map[state.tab]] || [])];
+      const q = $("search").value.toLowerCase(), host = $("hostFilter").value, target = $("targetFilter").value, protocol = $("protocolFilter").value;
+      const minimumImportance = Number($("minimumImportance").value || 0);
+      rows = rows.filter(row => (!host || (state.tab === "target" ? true : row.host===host)) &&
+        (!target || (state.tab === "target" ? (row.target || row.host)===target : true)) &&
+        (!protocol || row.protocol===protocol || (row.protocols||[]).includes(protocol)) &&
+        (!q || JSON.stringify(row).toLowerCase().includes(q)) &&
+        (state.tab === "data" || Number(row.importance_score||0) >= minimumImportance));
+      const metric = state.ranking[state.tab] || "total_score";
+      rows.sort((a,b) => Number(b[metric] ?? b.total_score ?? b.score ?? 0) - Number(a[metric] ?? a.total_score ?? a.score ?? 0));
+      return rows;
+    }
+
+    function renderResults() {
+      if (state.tab === "docs") { $("toolbar").style.display = "none"; renderDocs(); return; }
+      if (!state.result) return renderEmpty();
+      $("toolbar").style.display = state.tab === "log" ? "none" : "grid";
+      if (state.tab === "log") { $("results").innerHTML = `<pre>${esc(state.result.human_log)}</pre>`; return; }
+      if (state.tab === "graphs") { renderGraphs(); return; }
+      const rows = currentRows();
+      if (!rows.length) { $("results").innerHTML = `<div class="empty">No matching records for this view.</div>`; return; }
+      $("results").innerHTML = rows.map(renderCard).join("");
+      document.querySelectorAll(".card-head").forEach(head => head.addEventListener("click", () => head.parentElement.classList.toggle("open")));
+    }
+
+    function renderCard(row) {
+      const kind = row.event === "global_anomaly" ? "global" : row.event === "target_anomaly" ? "target" : row.event === "flow_anomaly" ? "flow" : (row.event === "protocol_hourly_data" || row.event === "target_hourly_data") ? "data" : "protocol";
+      const time = row.hour_start ?? row.ts;
+      const protocol = row.protocol || (row.protocols||[]).join(", ");
+      const score = row.global_score ?? row.score;
+      const title = kind === "global" ? `Global anomaly · ${row.host}` :
+        kind === "target" ? `Target-IP anomaly · ${row.target || row.host}` :
+        kind === "flow" ? `SSL flow alert · ${row.server || row.responsible_flows?.[0]?.details?.server || "unknown server"}` :
+        kind === "data" ? `${protocol} hourly data · ${row.host || row.target}` : `${protocol} protocol-hour · ${row.host}`;
+      const reasons = row.reasons || row.protocol_anomalies?.flatMap(x=>
+        x.reasons.map(reason=>({...reason, source_protocol:x.protocol}))) || [];
+      const flows = row.responsible_flows || [];
+      const flowNotice = kind === "flow"
+        ? `<div class="reason"><strong>Support evidence, not an anomaly</strong><p>This SSL flow entry is kept to explain the protocol-hour and global anomalies. It is an alert, not an anomaly class.</p></div>`
+        : "";
+      return `<article class="card ${kind}">
+        <div class="card-head"><span class="badge">${esc(kind === "flow" ? "alert" : kind)}</span>
+          <div><div class="headline">${esc(title)}${row.importance_level?`<span class="importance-pill importance-${esc(row.importance_level)}">${esc(row.importance_level)} ${fmt(row.importance_score)}</span>`:""}</div>
+          <div class="meta">traffic time ${esc(time)} · protocol ${esc(protocol||"multiple")} · total score ${fmt(row.total_score)} · excess ${fmt(row.threshold_excess)} · ${flows.length}/${row.responsible_flow_count ?? flows.length} flows shown</div></div>
+          <div class="score">${score == null ? "" : `<div class="score-label">${kind === "global" ? "global score" : "total score"}</div><div>${fmt(score)}</div>`}</div></div>
+        <div class="card-body">
+          ${flowNotice}
+          ${kind==="data" ? renderFeatureGrid(row) : reasons.map(renderReason).join("")}
+          ${flows.length ? renderFlows(flows,row.responsible_flow_count) : ""}
+          ${kind==="global" ? `<pre>${esc(JSON.stringify(row.protocol_contributions,null,2))}</pre>` : ""}
+          ${row.importance_components ? `<div class="reason"><strong>Importance components</strong><p>${esc(JSON.stringify(row.importance_components))}</p></div>` : ""}
+        </div></article>`;
+    }
+
+    function renderReason(reason) {
+      const direction = reason.direction || "deviation";
+      const protocol = reason.source_protocol || reason.protocol;
+      const scopedFeature = protocol ? `${protocol}.${reason.feature}` : reason.feature;
+      const scope = reason.source_ip ? ` · IP ${reason.source_ip} · hour ${reason.hour_start}–${Number(reason.hour_start)+Number(reason.window_seconds||3600)-1}` : "";
+      return `<div class="reason"><div class="reason-title"><span>${esc(scopedFeature)}</span>
+        <span class="${esc(direction)}">${esc(direction)}</span>
+        <span class="meta">value ${fmt(reason.value)} · baseline ${fmt(reason.mean)} · z ${fmt(reason.zscore)} · threshold ${fmt(reason.threshold)}${esc(scope)}</span></div>
+        <p>${esc(reason.explanation || "")}</p></div>`;
+    }
+
+    function renderFeatureGrid(row) {
+      return `<div class="reason"><table class="flow-table"><thead><tr><th>Feature</th><th>Value</th><th>Z-score</th></tr></thead><tbody>` +
+        Object.entries(row.features||{}).map(([key,value])=>`<tr><td>${esc(key)}</td><td>${fmt(value)}</td><td>${fmt(row.zscores?.[key])}</td></tr>`).join("") +
+        `</tbody></table></div>`;
+    }
+
+    function renderFlows(flows,total) {
+      return `<div class="flow-title">Responsible flows · showing ${flows.length} of ${total ?? flows.length}</div>
+        <table class="flow-table"><thead><tr><th>Log / time</th><th>UID</th><th>Source</th><th>Destination</th><th>Matched features</th><th>Relevant fields</th></tr></thead>
+        <tbody>${flows.map(flow=>`<tr><td><span class="badge">${esc(flow.log)}</span><br>${esc(flow.ts)}</td>
+          <td><code>${esc(flow.uid || flow.fuid || "n/a")}</code></td>
+          <td>${esc(flow.src||"?")}:${esc(flow.src_port||"?")}</td><td>${esc(flow.dst||"?")}:${esc(flow.dst_port||"?")}</td>
+          <td>${(flow.matched_features||[]).map(x=>`<code>${esc(x)}</code>`).join(" ")}</td>
+          <td class="details">${esc(JSON.stringify(flow.details||{}))}</td></tr>`).join("")}</tbody></table>`;
+    }
+
+    function xScale(value, minimum, maximum, left=72, right=1180) {
+      return left + (maximum === minimum ? .5 : (value-minimum)/(maximum-minimum)) * (right-left);
+    }
+
+    function groupedCounts(rows, timestampField) {
+      const counts = new Map();
+      rows.forEach(row => {
+        const raw = row[timestampField] ?? row.ts;
+        const hour = Math.floor(Number(raw)/3600)*3600;
+        counts.set(hour, (counts.get(hour)||0)+1);
+      });
+      return counts;
+    }
+
+    function renderGraphs() {
+      const host = $("hostFilter").value, target = $("targetFilter").value, protocol = $("protocolFilter").value;
+      const minimumImportance = Number($("minimumImportance").value || 0);
+      const matches = row => (!host || row.host===host) &&
+        (!target || (row.target || row.host)===target) &&
+        (!protocol || row.protocol===protocol || (row.protocols||[]).includes(protocol));
+      const hourly = state.result.hourly_data.filter(matches);
+      const targetHourly = state.result.target_hourly_data.filter(matches);
+      const graphRows = hourly.length ? hourly : targetHourly;
+      if (!graphRows.length) {
+        $("results").innerHTML = `<div class="empty">No hourly data matches these IP/protocol filters.</div>`; return;
+      }
+      const allHours = graphRows.map(row=>Number(row.hour_start));
+      const minimum = Math.min(...allHours), maximum = Math.max(...allHours);
+      const volume = new Map();
+      graphRows.forEach(row => {
+        const count = Number(row.features?.flow_count ?? row.features?.ssl_flows ?? 0);
+        const targetCount = Number(row.features?.incoming_flow_count ?? 0);
+        volume.set(Number(row.hour_start), (volume.get(Number(row.hour_start))||0)+count);
+        if (!count && targetCount) {
+          volume.set(Number(row.hour_start), (volume.get(Number(row.hour_start))||0)+targetCount);
+        }
+      });
+      const volumeValues = [...volume.values()], maxVolume = Math.max(1,...volumeValues);
+      const sortedVolume = [...volume.entries()].sort((a,b)=>a[0]-b[0]);
+      const points = sortedVolume.map(([hour,value]) => {
+        const x=xScale(hour,minimum,maximum), y=220-(Math.log1p(value)/Math.log1p(maxVolume))*175;
+        return `${x},${y}`;
+      }).join(" ");
+      const trainingRows = graphRows.filter(x=>x.phase==="training");
+      const bandWidth = maximum===minimum ? 80 : Math.max(10,(3600/(maximum-minimum))*1108);
+      const bands = trainingRows.map(row=>`<rect class="training-band" x="${xScale(Number(row.hour_start),minimum,maximum)-bandWidth/2}" y="25" width="${bandWidth}" height="195"><title>Benign warmup hour ${row.hour_start} · protocol ${row.protocol}</title></rect>`).join("");
+      const volumeDots = sortedVolume.map(([hour,value]) => {
+        const x=xScale(hour,minimum,maximum), y=220-(Math.log1p(value)/Math.log1p(maxVolume))*175;
+        return `<circle cx="${x}" cy="${y}" r="4" fill="#48a8ff"><title>hour ${hour}: ${value} flows/records</title></circle>`;
+      }).join("");
+      const ticks = Array.from({length:6},(_,i)=>minimum+(maximum-minimum)*i/5);
+      const xTicks = ticks.map(hour=>`<line class="grid" x1="${xScale(hour,minimum,maximum)}" y1="25" x2="${xScale(hour,minimum,maximum)}" y2="225"/>
+        <text x="${xScale(hour,minimum,maximum)}" y="246" text-anchor="middle">${Math.round(hour)}</text>`).join("");
+      const volumeSvg = `<svg class="chart" viewBox="0 0 1200 260" preserveAspectRatio="none">
+        ${bands}${xTicks}<line class="axis" x1="72" y1="225" x2="1180" y2="225"/>
+        <text x="10" y="32">${maxVolume}</text><text x="40" y="222">0</text>
+        <polyline points="${points}" fill="none" stroke="#48a8ff" stroke-width="3" vector-effect="non-scaling-stroke"/>
+        ${volumeDots}<text x="625" y="258" text-anchor="middle">Zeek traffic-hour start timestamp</text></svg>`;
+
+      const updates = (state.result.model_updates||[]).filter(matches);
+      const important = row => matches(row) && Number(row.importance_score||0) >= minimumImportance;
+      const flowAlerts = state.result.flow_anomalies.filter(important);
+      const protocolAlerts = state.result.protocol_anomalies.filter(important);
+      const targetAlerts = state.result.target_anomalies.filter(important);
+      const globalAlerts = state.result.global_anomalies.filter(important);
+      const flowCounts=groupedCounts(flowAlerts,"ts"), protocolCounts=groupedCounts(protocolAlerts,"hour_start"), targetCounts=groupedCounts(targetAlerts,"hour_start"), globalCounts=groupedCounts(globalAlerts,"hour_start");
+      const lanes = [["Training",45],["Model update",90],["SSL flow alert",135],["Protocol-hour",180],["Target-IP",225],["Global",270]];
+      const laneLines=lanes.map(([label,y])=>`<text x="8" y="${y+4}">${label}</text><line class="grid" x1="110" y1="${y}" x2="1180" y2="${y}"/>`).join("");
+      const trainingMarks=trainingRows.map(row=>`<rect x="${xScale(Number(row.hour_start),minimum,maximum)-bandWidth/2}" y="34" width="${bandWidth}" height="22" rx="3" fill="#48a8ff"><title>Benign warmup hour ${row.hour_start} · protocol ${row.protocol}</title></rect>`).join("");
+      const modeColor={training_fit:"#48a8ff",baseline_update:"#35d1d1",drift_update:"#f5b942",suspicious_update:"#ff657a"};
+      const updateMarks=updates.map(row=>`<circle cx="${xScale(Number(row.hour_start),minimum,maximum)}" cy="90" r="5" fill="${modeColor[row.mode]||"#91a6be"}"><title>${row.protocol} ${row.mode}, hour ${row.hour_start}, score ${row.score}</title></circle>`).join("");
+      const countMarks=(counts,y,color,label)=>[...counts.entries()].map(([hour,count])=>`<circle cx="${xScale(hour,minimum,maximum)}" cy="${y}" r="${Math.min(13,4+Math.sqrt(count)*2)}" fill="${color}" opacity=".9"><title>${count} ${label}, hour ${hour}</title></circle>`).join("");
+      const eventSvg=`<svg class="chart" viewBox="0 0 1200 305" preserveAspectRatio="none">${laneLines}${trainingMarks}${updateMarks}
+        ${countMarks(flowCounts,135,"#ff657a","SSL flow alerts")}
+        ${countMarks(protocolCounts,180,"#f5b942","protocol-hour anomalies")}
+        ${countMarks(targetCounts,225,"#35d1d1","target-IP anomalies")}
+        ${countMarks(globalCounts,270,"#cf7cff","global anomalies")}
+        <text x="1180" y="18" text-anchor="end">Circle size represents count</text></svg>`;
+      const scope = `${host||"all source IPs"}${target?` · target ${target}`:""} · ${protocol||"all protocols"} · hours ${minimum}–${maximum}`;
+      $("results").innerHTML = `<section class="chart-panel"><div class="chart-head"><h2>Traffic volume and per-protocol benign warmup</h2><span>${esc(scope)}</span></div>
+        ${volumeSvg}<div class="legend"><span><i style="background:#48a8ff"></i>Flows/records</span><span><i style="background:rgba(72,168,255,.35)"></i>Benign warmup hour</span></div>
+        <div class="help" style="margin-top:10px">Each shaded band is the first benign hours for one protocol model. Later bands appear when that protocol first shows up later in the capture.</div></section>
+        <section class="chart-panel"><div class="chart-head"><h2>Training, drift, and anomaly timeline</h2><span>Hover markers for details</span></div>
+        ${eventSvg}<div class="legend"><span><i style="background:#48a8ff"></i>Training fit</span><span><i style="background:#35d1d1"></i>Baseline update</span>
+        <span><i style="background:#f5b942"></i>Drift update</span><span><i style="background:#ff657a"></i>Suspicious / SSL flow alert</span>
+        <span><i style="background:#f5b942"></i>Protocol-hour anomaly</span><span><i style="background:#35d1d1"></i>Target-IP anomaly</span><span><i style="background:#cf7cff"></i>Global anomaly</span></div></section>`;
+    }
+
+    function renderDocs() {
+      if (!state.docs?.length) {
+        $("results").innerHTML = `<div class="empty">Documentation is unavailable.</div>`;
+        return;
+      }
+      $("results").innerHTML = state.docs.map(doc => `
+        <section class="doc-page">
+          <div class="chart-head"><h2>${esc(doc.title)}</h2><span>${esc(doc.name)}</span></div>
+          <div class="help">This is the source markdown rendered as a readable document inside the workbench.</div>
+          <div class="doc-body">${doc.content || doc.content_html || doc.html || ""}</div>
+        </section>`).join("");
+    }
+
+    function updateCaptureReference() {
+      const target = $("captureReference");
+      if (!target) return;
+      if (!state.capture) { target.textContent = "· inspect folder for reference"; return; }
+      const totalHours = Number(state.capture.duration_hours || 0);
+      const totalSeconds = Number(state.capture.duration_seconds || 0);
+      target.textContent = `· reference capture: ${totalHours.toFixed(1)} h total (${Math.round(totalSeconds).toLocaleString()} s)`;
+      target.title = `${state.capture.records} timestamped records across ${state.capture.active_traffic_hours} active traffic-hours; traffic-hour span ${state.capture.traffic_hour_span} h`;
+    }
+
+    async function inspectFolder() {
+      const path = $("zeekPath").value.trim();
+      if (!path) return;
+      try {
+        const response=await fetch(`/api/inspect?path=${encodeURIComponent(path)}`);
+        const payload=await response.json();
+        if (!response.ok) throw new Error(payload.error);
+        state.capture=payload; updateCaptureReference();
+      } catch (error) {
+        state.capture=null; updateCaptureReference();
+      }
+    }
+
+    function renderEmpty() {
+      $("summary").innerHTML = "";
+      $("results").innerHTML = `<div class="empty"><strong>No analysis loaded</strong><br>Choose a Zeek folder, adjust the model, and run the detector.</div>`;
+    }
+
+    async function browse(path) {
+      const response = await fetch(`/api/browse?path=${encodeURIComponent(path || $("zeekPath").value)}`);
+      const data = await response.json();
+      if (!response.ok) return showError(data.error);
+      state.browsePath = data.path; state.browseParent = data.parent; state.browseIsZeek = data.is_zeek;
+      $("browserPath").textContent = data.path;
+      $("folderStatus").textContent = data.is_zeek ? "✓ Contains ssl.log and conn.log" : "Select a folder containing ssl.log and conn.log";
+      $("selectFolder").disabled = !data.is_zeek;
+      $("folders").innerHTML = data.directories.map(folder =>
+        `<button class="folder" data-path="${esc(folder.path)}"><span>📁 ${esc(folder.name)}</span>${folder.is_zeek?'<span class="zeek-tag">ZEEK LOGS</span>':''}</button>`).join("") || `<div class="empty">No accessible subfolders.</div>`;
+      $("folders").querySelectorAll(".folder").forEach(button => button.addEventListener("click",()=>browse(button.dataset.path)));
+    }
+
+    $("runBtn").addEventListener("click", runAnalysis);
+    $("zeekPath").addEventListener("change", inspectFolder);
+    $("resetBtn").addEventListener("click", () => { state.config=structuredClone(state.defaults); renderControls(); });
+    $("browseBtn").addEventListener("click", async () => { await browse($("zeekPath").value); $("browser").showModal(); });
+    $("parentBtn").addEventListener("click",()=>browse(state.browseParent));
+    $("closeBrowser").addEventListener("click",()=>$("browser").close());
+    $("selectFolder").addEventListener("click",()=>{ $("zeekPath").value=state.browsePath; $("browser").close(); inspectFolder(); if($("autoRun").checked) runAnalysis(); });
+    document.querySelectorAll(".tab").forEach(tab=>tab.addEventListener("click",()=>{ document.querySelectorAll(".tab").forEach(x=>x.classList.remove("active")); tab.classList.add("active"); state.tab=tab.dataset.tab;
+      if (state.ranking[state.tab]) $("rankingMetric").value=state.ranking[state.tab]; renderResults(); }));
+    ["search","hostFilter","protocolFilter"].forEach(id=>$(id).addEventListener(id==="search"?"input":"change",renderResults));
+    $("minimumImportance").addEventListener("change",renderResults);
+    $("rankingMetric").addEventListener("change",()=>{ state.ranking[state.tab]=$("rankingMetric").value; renderResults(); });
+    init().then(inspectFolder).catch(error=>showError(error.message));
+  </script>
+</body>
+</html>
