@@ -36,6 +36,7 @@ class DashboardTests(unittest.TestCase):
         self.assertIn("Minimum level", html)
         self.assertIn("Composite importance", html)
         self.assertIn("All target IPs", html)
+        self.assertIn("Save conf", html)
         self.assertIn("ignore_multicast_broadcast", dashboard.SETTING_METADATA)
         self.assertEqual(
             dashboard.SETTING_METADATA["ignore_multicast_broadcast"][0],
@@ -138,6 +139,24 @@ class DashboardTests(unittest.TestCase):
         self.assertIn("<h1>Title</h1>", rendered)
         self.assertIn("<ul><li>one</li><li>two</li></ul>", rendered)
         self.assertNotIn("# Title", rendered)
+
+    def test_write_run_config_persists_current_settings(self):
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / "detector.conf"
+            dashboard.write_run_config(
+                path,
+                {
+                    "common": {
+                        "training_hours": 9,
+                        "ignore_multicast_broadcast": False,
+                    },
+                    "multi_protocol": {"ssl_flow_threshold": 4.4},
+                },
+            )
+            text = path.read_text(encoding="utf-8")
+            self.assertIn("training_hours = 9", text)
+            self.assertIn("ignore_multicast_broadcast = false", text)
+            self.assertIn("ssl_flow_threshold = 4.4", text)
 
 
 if __name__ == "__main__":
