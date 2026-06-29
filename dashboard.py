@@ -544,13 +544,18 @@ class DashboardHandler(BaseHTTPRequestHandler):
         self.send_error(HTTPStatus.NOT_FOUND)
 
     def do_POST(self) -> None:
-        if urlparse(self.path).path != "/api/run":
-            self.send_error(HTTPStatus.NOT_FOUND)
-            return
+        parsed = urlparse(self.path)
         try:
             length = int(self.headers.get("Content-Length", "0"))
             payload = json.loads(self.rfile.read(length) or b"{}")
-            self.send_json(run_detector(payload))
+            if parsed.path == "/api/run":
+                self.send_json(run_detector(payload))
+                return
+            if parsed.path == "/api/save-config":
+                write_run_config(DEFAULT_CONFIG, payload.get("config", {}))
+                self.send_json({"saved": str(DEFAULT_CONFIG), "ok": True})
+                return
+            self.send_error(HTTPStatus.NOT_FOUND)
         except subprocess.TimeoutExpired:
             self.send_json({"error": "Detector timed out after 180 seconds"}, 504)
         except (ValueError, RuntimeError, OSError, json.JSONDecodeError) as error:
