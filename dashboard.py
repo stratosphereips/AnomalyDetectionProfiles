@@ -22,6 +22,7 @@ from detection_core import ZeekReader, number
 
 
 ROOT = Path(__file__).resolve().parent
+LAUNCH_DIR = Path.cwd().resolve()
 HTML_PATH = ROOT / "dashboard.html"
 DEFAULT_CONFIG = ROOT / "anomaly_detector.conf"
 DETECTOR = ROOT / "multi_protocol_anomaly_detector.py"
@@ -308,7 +309,7 @@ def markdown_to_html(text: str) -> str:
 def resolve_local_path(raw_path: str) -> Path:
     path = Path(raw_path).expanduser()
     if not path.is_absolute():
-        path = ROOT / path
+        path = LAUNCH_DIR / path
     return path.resolve()
 
 
@@ -473,7 +474,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
                         key: {"label": label, "help": help_text}
                         for key, (label, help_text) in SETTING_METADATA.items()
                     },
-                    "default_zeek_dir": str(ROOT / "bro"),
+                    "default_zeek_dir": str(LAUNCH_DIR),
                 }
             )
             return
@@ -506,10 +507,10 @@ class DashboardHandler(BaseHTTPRequestHandler):
             return
         if parsed.path == "/api/browse":
             query = parse_qs(parsed.query)
-            requested = query.get("path", [str(ROOT)])[0]
+            requested = query.get("path", [str(LAUNCH_DIR)])[0]
             path = Path(requested).expanduser()
             if not path.is_absolute():
-                path = ROOT / path
+                path = LAUNCH_DIR / path
             path = path.resolve()
             if not path.is_dir():
                 self.send_json({"error": f"Not a directory: {path}"}, 400)
