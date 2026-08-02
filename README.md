@@ -11,7 +11,8 @@ python3 dashboard.py --open
 ```
 
 Then use `http://127.0.0.1:8765/`. The dashboard provides a local folder
-browser, every detection threshold, optional debounced auto-run, summaries,
+browser that starts in the directory from which the dashboard was launched,
+every detection threshold, optional debounced auto-run, summaries,
 filters, colored anomaly levels, expandable explanations, responsible-flow
 tables, hourly data, and the complete run log. Its timeline tab plots hourly
 flow/record volume, benign-training intervals, model updates, drift,
