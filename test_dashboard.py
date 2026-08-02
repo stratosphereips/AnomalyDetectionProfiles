@@ -33,7 +33,8 @@ class DashboardTests(unittest.TestCase):
         html = dashboard.HTML_PATH.read_text(encoding="utf-8")
         self.assertIn("grid-template-columns: 360px minmax(0,1fr)", html)
         self.assertIn("Global anomalies", html)
-        self.assertIn("Protocol-hour anomalies", html)
+        self.assertIn("Protocol-window anomalies", html)
+        self.assertIn("window_seconds", dashboard.SETTING_METADATA)
         self.assertIn("Target-IP anomalies", html)
         self.assertIn("SSL flow alerts", html)
         self.assertIn("Support evidence, not an anomaly", html)
@@ -47,6 +48,9 @@ class DashboardTests(unittest.TestCase):
         self.assertIn("Composite importance", html)
         self.assertIn("All target IPs", html)
         self.assertIn("Save conf", html)
+        self.assertIn('["window_seconds","training_hours"', html)
+        self.assertIn('key === "window_seconds"', html)
+        self.assertIn("setTimeout(runAnalysis, 700)", html)
         self.assertIn("ignore_multicast_broadcast", dashboard.SETTING_METADATA)
         self.assertEqual(
             dashboard.SETTING_METADATA["ignore_multicast_broadcast"][0],
@@ -89,6 +93,7 @@ class DashboardTests(unittest.TestCase):
             )
             config = dashboard.read_config(dashboard.DEFAULT_CONFIG)
             config["common"]["training_hours"] = 0
+            config["common"]["window_seconds"] = 300
             config["common"]["sensitivity"] = 1.0
             with patch.object(dashboard, "RUNS_DIR", root / "runs"):
                 result = dashboard.run_detector(
@@ -97,6 +102,11 @@ class DashboardTests(unittest.TestCase):
             self.assertEqual(result["summary"]["records_processed"], 2)
             self.assertEqual(result["capture"]["duration_seconds"], 0)
             self.assertEqual(result["capture"]["traffic_hour_span"], 1)
+            self.assertEqual(result["capture"]["window_seconds"], 300)
+            self.assertEqual(result["summary"]["window_seconds"], 300)
+            self.assertTrue(
+                all(row["window_seconds"] == 300 for row in result["hourly_data"])
+            )
             self.assertTrue(result["model_updates"])
             self.assertEqual(
                 result["flow_anomalies"],
@@ -149,11 +159,14 @@ class DashboardTests(unittest.TestCase):
                 ["ts", "fingerprint"],
                 ["1754365630", "ignored"],
             )
-            capture = dashboard.inspect_zeek_folder(str(root))
+            capture = dashboard.inspect_zeek_folder(str(root), 300)
             self.assertEqual(capture["duration_seconds"], 7200)
             self.assertEqual(capture["duration_hours"], 2.0)
             self.assertEqual(capture["traffic_hour_span"], 3)
             self.assertEqual(capture["active_traffic_hours"], 2)
+            self.assertEqual(capture["window_seconds"], 300)
+            self.assertEqual(capture["traffic_window_span"], 25)
+            self.assertEqual(capture["active_traffic_windows"], 2)
 
     def test_docs_endpoint_returns_expected_documents(self):
         self.assertEqual(
@@ -177,6 +190,7 @@ class DashboardTests(unittest.TestCase):
                 {
                     "common": {
                         "training_hours": 9,
+                        "window_seconds": 300,
                         "ignore_multicast_broadcast": False,
                     },
                     "multi_protocol": {"ssl_flow_threshold": 4.4},
@@ -184,6 +198,7 @@ class DashboardTests(unittest.TestCase):
             )
             text = path.read_text(encoding="utf-8")
             self.assertIn("training_hours = 9", text)
+            self.assertIn("window_seconds = 300", text)
             self.assertIn("ignore_multicast_broadcast = false", text)
             self.assertIn("ssl_flow_threshold = 4.4", text)
 
