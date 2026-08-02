@@ -73,7 +73,7 @@ class Reporter:
     ) -> None:
         scope = f"{protocol:<14} " if protocol else ""
         plain = (
-            f"DATA     {scope}host={host:<39} hour={hour:<8} "
+            f"DATA     {scope}host={host:<39} window={hour:<8} "
             f"phase={phase:<9} {json.dumps(features, sort_keys=True)}"
         )
         self._log(plain)
@@ -147,7 +147,8 @@ class Reporter:
 
     def global_anomaly(self, event: dict[str, Any]) -> None:
         headline = (
-            f"GLOBAL   host={event['host']} hour={event['hour_start']} "
+            f"GLOBAL   host={event['host']} "
+            f"window={event.get('window_start', event['hour_start'])} "
             f"score={event['global_score']:.4f} "
             f"confidence={event['confidence']} "
             f"protocols={','.join(event['protocols'])}"
