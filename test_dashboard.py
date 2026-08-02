@@ -19,6 +19,16 @@ def write_zeek_log(path: Path, fields: list[str], row: list[str]) -> None:
 
 
 class DashboardTests(unittest.TestCase):
+    def test_relative_paths_start_from_dashboard_launch_directory(self):
+        with tempfile.TemporaryDirectory() as temp:
+            launch_dir = Path(temp)
+            capture = launch_dir / "capture"
+            capture.mkdir()
+            with patch.object(dashboard, "LAUNCH_DIR", launch_dir):
+                self.assertEqual(
+                    dashboard.resolve_local_path("capture"), capture.resolve()
+                )
+
     def test_dashboard_html_is_full_view_and_has_required_tabs(self):
         html = dashboard.HTML_PATH.read_text(encoding="utf-8")
         self.assertIn("grid-template-columns: 360px minmax(0,1fr)", html)
