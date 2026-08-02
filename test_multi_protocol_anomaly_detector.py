@@ -7,6 +7,7 @@ from pathlib import Path
 from multi_protocol_anomaly_detector import (
     MultiProtocolDetector,
     Outputs,
+    bucket_start,
     discover_logs,
     importance_metrics,
     is_ignored_multicast_broadcast,
@@ -17,6 +18,7 @@ from multi_protocol_anomaly_detector import (
 def arguments():
     return argparse.Namespace(
         training_hours=1,
+        window_seconds=3600,
         sensitivity=1.0,
         ignore_multicast_broadcast=True,
         minimum_points=1,
@@ -40,6 +42,44 @@ def arguments():
 
 
 class MultiProtocolTests(unittest.TestCase):
+    def test_configurable_window_bucketing(self):
+        self.assertEqual(bucket_start(599.9, 300), 300)
+        self.assertEqual(bucket_start(600.0, 300), 600)
+        with tempfile.TemporaryDirectory() as temp:
+            args = arguments()
+            args.window_seconds = 300
+            output = Outputs(Path(temp), quiet=True)
+            detector = MultiProtocolDetector(args, output)
+            for ts, uid in ((1.0, "D1"), (301.0, "D2")):
+                detector.observe(
+                    "dns",
+                    {
+                        "ts": str(ts),
+                        "uid": uid,
+                        "id.orig_h": "10.0.0.1",
+                        "id.resp_h": "1.1.1.1",
+                        "query": "example.test",
+                        "qtype_name": "A",
+                        "rcode_name": "NOERROR",
+                    },
+                    "10.0.0.1",
+                    ts,
+                )
+            detector.finalize_all()
+            output.close()
+            rows = [
+                json.loads(line)
+                for line in (Path(temp) / "protocol_hourly_data.jsonl")
+                .read_text()
+                .splitlines()
+            ]
+            self.assertEqual(
+                [row["window_start"] for row in rows], [0, 300]
+            )
+            self.assertTrue(
+                all(row["window_seconds"] == 300 for row in rows)
+            )
+
     def test_importance_rewards_breadth_and_threshold_excess(self):
         narrow = importance_metrics(
             [{"zscore": 4.0, "threshold": 3.5}], 4.0, protocol_count=1
