@@ -45,8 +45,9 @@ python3 multi_protocol_anomaly_detector.py bro/ \
   --training-hours 3
 ```
 
-The input must be a Zeek log directory. The detector automatically correlates
-`ssl.log` and `conn.log` by UID.
+The input must be a directory containing at least one supported Zeek protocol
+log. TLS is optional; when both `ssl.log` and `conn.log` are available, the
+detector automatically correlates them by UID.
 
 
 
