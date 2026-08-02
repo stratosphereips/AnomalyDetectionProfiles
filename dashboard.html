@@ -595,7 +595,7 @@
       if (!response.ok) return showError(data.error);
       state.browsePath = data.path; state.browseParent = data.parent; state.browseIsZeek = data.is_zeek;
       $("browserPath").textContent = data.path;
-      $("folderStatus").textContent = data.is_zeek ? "✓ Contains ssl.log and conn.log" : "Select a folder containing ssl.log and conn.log";
+      $("folderStatus").textContent = data.is_zeek ? "✓ Contains supported Zeek logs" : "Select a folder containing a supported Zeek protocol log";
       $("selectFolder").disabled = !data.is_zeek;
       $("folders").innerHTML = data.directories.map(folder =>
         `<button class="folder" data-path="${esc(folder.path)}"><span>📁 ${esc(folder.name)}</span>${folder.is_zeek?'<span class="zeek-tag">ZEEK LOGS</span>':''}</button>`).join("") || `<div class="empty">No accessible subfolders.</div>`;
