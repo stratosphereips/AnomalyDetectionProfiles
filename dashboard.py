@@ -57,11 +57,23 @@ DETECTED_LOGS = {
 
 
 SETTING_METADATA = {
-    "training_hours": ("Benign training hours", "Observed traffic-hours treated as benign."),
+    "training_hours": (
+        "Benign training windows",
+        "Observed windows fitted as benign per model. Zero skips explicit "
+        "training, but statistical alerts still require Minimum baseline points.",
+    ),
+    "window_seconds": (
+        "Window size (seconds)",
+        "Aggregation interval. Use 300 for 5-minute windows or 3600 for hourly windows.",
+    ),
     "sensitivity": ("Global sensitivity", "Higher values emit more anomalies; lower values emit fewer."),
     "ignore_multicast_broadcast": ("Ignore multicast/broadcast", "Skip multicast and broadcast flows entirely when enabled."),
-    "minimum_points": ("Minimum baseline points", "Required observations before a z-score can trigger."),
-    "threshold": ("Protocol z threshold", "Fallback z-score threshold for protocol-hour features."),
+    "minimum_points": (
+        "Minimum baseline points",
+        "Prior observations required before a statistical z-score can be nonzero; "
+        "with zero training, the earliest eligible window is this value plus one.",
+    ),
+    "threshold": ("Protocol z threshold", "Fallback z-score threshold for protocol-window features."),
     "threshold_quantile": ("Threshold quantile", "Benign quantile used for empirical threshold calibration."),
     "drift_alpha": ("Drift adaptation rate", "EWMA update rate for small deviations."),
     "suspicious_alpha": ("Suspicious adaptation rate", "Slow EWMA rate that limits baseline poisoning."),
@@ -72,7 +84,7 @@ SETTING_METADATA = {
     "corroboration_bonus": ("Corroboration bonus", "Bonus for each additional anomalous protocol."),
     "corroboration_bonus_cap": ("Corroboration cap", "Maximum total corroboration bonus."),
     "max_responsible_flows": ("Responsible flow limit", "Maximum representative flows embedded per anomaly."),
-    "ssl_hourly_threshold": ("SSL hourly z threshold", "Fallback threshold for specialized SSL hourly features."),
+    "ssl_hourly_threshold": ("SSL window z threshold", "Fallback threshold for specialized SSL window features."),
     "ssl_flow_threshold": ("SSL flow z threshold", "Threshold for bytes to a known TLS server."),
     "ssl_novelty_threshold": ("SSL novelty threshold", "Gate for new server and JA3S evidence."),
     "ssl_baseline_alpha": ("SSL baseline adaptation", "EWMA rate for normal SSL flows."),
@@ -320,13 +332,18 @@ def has_supported_zeek_logs(path: Path) -> bool:
     )
 
 
-def inspect_zeek_folder(raw_path: str) -> dict[str, Any]:
+def inspect_zeek_folder(
+    raw_path: str, window_seconds: int = 3600
+) -> dict[str, Any]:
+    if window_seconds < 1:
+        raise ValueError("Window size must be at least one second")
     path = resolve_local_path(raw_path)
     if not path.is_dir():
         raise ValueError(f"Zeek directory does not exist: {path}")
     timestamps: list[float] = []
     records = 0
     active_hours: set[int] = set()
+    active_windows: set[int] = set()
     logs = 0
     for log_path in sorted(path.glob("*.log")):
         if log_path.stem not in DETECTED_LOGS:
@@ -339,6 +356,7 @@ def inspect_zeek_folder(raw_path: str) -> dict[str, Any]:
                 ts = number(record.get("ts"))
                 timestamps.append(ts)
                 active_hours.add(int(ts) - int(ts) % 3600)
+                active_windows.add(int(ts) - int(ts) % window_seconds)
                 records += 1
                 log_records += 1
         except (OSError, ValueError, json.JSONDecodeError):
@@ -350,6 +368,8 @@ def inspect_zeek_folder(raw_path: str) -> dict[str, Any]:
     minimum, maximum = min(timestamps), max(timestamps)
     first_hour = int(minimum) - int(minimum) % 3600
     last_hour = int(maximum) - int(maximum) % 3600
+    first_window = int(minimum) - int(minimum) % window_seconds
+    last_window = int(maximum) - int(maximum) % window_seconds
     duration_seconds = maximum - minimum
     return {
         "path": str(path),
@@ -361,6 +381,11 @@ def inspect_zeek_folder(raw_path: str) -> dict[str, Any]:
         "duration_hours": round(duration_seconds / 3600.0, 3),
         "traffic_hour_span": ((last_hour - first_hour) // 3600) + 1,
         "active_traffic_hours": len(active_hours),
+        "window_seconds": window_seconds,
+        "traffic_window_span": (
+            (last_window - first_window) // window_seconds
+        ) + 1,
+        "active_traffic_windows": len(active_windows),
     }
 
 
@@ -377,6 +402,8 @@ def run_detector(payload: dict[str, Any]) -> dict[str, Any]:
     run_root.mkdir(parents=True, exist_ok=False)
     config_path = run_root / "detector.conf"
     write_run_config(config_path, payload.get("config", {}))
+    run_config = read_config(config_path)
+    window_seconds = int(run_config["common"].get("window_seconds", 3600))
 
     started = time.monotonic()
     command = [
@@ -433,7 +460,7 @@ def run_detector(payload: dict[str, Any]) -> dict[str, Any]:
         "zeek_dir": str(zeek_dir),
         "elapsed_seconds": round(elapsed, 3),
         "summary": stop,
-        "capture": inspect_zeek_folder(str(zeek_dir)),
+        "capture": inspect_zeek_folder(str(zeek_dir), window_seconds),
         "model_updates": [
             event for event in events if event.get("event") == "model_update"
         ],
@@ -488,10 +515,15 @@ class DashboardHandler(BaseHTTPRequestHandler):
         if parsed.path == "/api/inspect":
             query = parse_qs(parsed.query)
             try:
-                self.send_json(
-                    inspect_zeek_folder(query.get("path", [""])[0])
+                window_seconds = int(
+                    query.get("window_seconds", ["3600"])[0]
                 )
-            except (ValueError, OSError) as error:
+                self.send_json(
+                    inspect_zeek_folder(
+                        query.get("path", [""])[0], window_seconds
+                    )
+                )
+            except (TypeError, ValueError, OSError) as error:
                 self.send_json({"error": str(error)}, 400)
             return
         if parsed.path == "/api/docs":
