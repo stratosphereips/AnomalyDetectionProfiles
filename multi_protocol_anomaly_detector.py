@@ -29,6 +29,7 @@ SKIPPED_LOGS = {
 DEFAULT_CONFIG = Path(__file__).with_name("anomaly_detector.conf")
 MULTI_DEFAULTS = {
     "training_hours": 3,
+    "window_seconds": 3600,
     "sensitivity": 1.0,
     "ignore_multicast_broadcast": True,
     "color": "auto",
@@ -220,6 +221,11 @@ def transform(value: float) -> float:
 
 def inverse(value: float) -> float:
     return math.expm1(value)
+
+
+def bucket_start(timestamp: float, window_seconds: int) -> int:
+    value = int(timestamp)
+    return value - value % window_seconds
 
 
 def importance_metrics(
@@ -620,6 +626,8 @@ class MultiProtocolDetector:
                 "protocol": "ssl",
                 "host": host,
                 "ts": ts,
+                "window_start": bucket_start(ts, self.args.window_seconds),
+                "window_seconds": self.args.window_seconds,
                 "uid": uid,
                 "server": server,
                 "reasons": reasons,
@@ -737,7 +745,7 @@ class MultiProtocolDetector:
             if not candidates:
                 # A lower-than-baseline novelty/count value can be caused by
                 # absent expected records. Show what was present so the user
-                # can inspect the hour even though missing flows have no UID.
+                # can inspect the window even though missing flows have no UID.
                 candidates = bucket.flow_records
             candidate_keys = []
             for flow in candidates:
@@ -854,7 +862,7 @@ class MultiProtocolDetector:
         ts: float,
     ) -> None:
         state = self.target_states.setdefault(target, TargetState())
-        hour = int(ts) - int(ts) % 3600
+        hour = bucket_start(ts, self.args.window_seconds)
         if state.bucket is None:
             state.bucket = TargetBucket(hour)
         elif state.bucket.hour != hour:
@@ -930,13 +938,13 @@ class MultiProtocolDetector:
                 if name == "incoming_flow_count":
                     explanation = (
                         f"Destination IP {target} received {value:g} flows "
-                        f"during traffic hour {bucket.hour}; its learned "
-                        f"baseline is {mean:.3f} per hour."
+                        f"during window {bucket.hour}; its learned "
+                        f"baseline is {mean:.3f} per window."
                     )
                 else:
                     explanation = (
                         f"Destination IP {target} had an unusual {name} "
-                        f"value for this hour. Matching Zeek records are "
+                        f"value for this window. Matching Zeek records are "
                         "listed under responsible_flows."
                     )
                 reasons.append(
@@ -948,8 +956,9 @@ class MultiProtocolDetector:
                         "threshold": round(threshold, 3),
                         "direction": direction,
                         "target_ip": target,
-                        "window_seconds": 3600,
+                        "window_seconds": self.args.window_seconds,
                         "hour_start": bucket.hour,
+                        "window_start": bucket.hour,
                         "explanation": explanation,
                     }
                 )
@@ -960,6 +969,8 @@ class MultiProtocolDetector:
                 "target": target,
                 "host": target,
                 "hour_start": bucket.hour,
+                "window_start": bucket.hour,
+                "window_seconds": self.args.window_seconds,
                 "phase": "training" if training else "detection",
                 "trained_hours": state.trained_hours,
                 "features": features,
@@ -978,6 +989,8 @@ class MultiProtocolDetector:
                 "target": target,
                 "host": target,
                 "hour_start": bucket.hour,
+                "window_start": bucket.hour,
+                "window_seconds": self.args.window_seconds,
                 "protocols": sorted(bucket.protocols),
                 "uids": sorted(bucket.uids),
                 "score": round(score, 3),
@@ -1023,7 +1036,7 @@ class MultiProtocolDetector:
     ) -> None:
         key = (host, protocol)
         state = self.states.setdefault(key, ProtocolState())
-        hour = int(ts) - int(ts) % 3600
+        hour = bucket_start(ts, self.args.window_seconds)
         if state.bucket is None:
             state.bucket = ProtocolBucket(hour)
         elif state.bucket.hour != hour:
@@ -1192,12 +1205,12 @@ class MultiProtocolDetector:
                 if name == "flow_count":
                     explanation = (
                         f"Source IP {host} produced {value:g} {protocol} "
-                        f"flows/records during traffic hour {bucket.hour}; "
-                        f"its learned baseline is {mean:.3f} per hour."
+                        f"flows/records during window {bucket.hour}; "
+                        f"its learned baseline is {mean:.3f} per window."
                     )
                 else:
                     explanation = (
-                        f"For source IP {host}, the {protocol} hour's {name} "
+                        f"For source IP {host}, the {protocol} window's {name} "
                         f"value was {direction} than the learned baseline. "
                         "Matching Zeek records are listed under "
                         "responsible_flows."
@@ -1213,7 +1226,8 @@ class MultiProtocolDetector:
                         "source_ip": host,
                         "protocol": protocol,
                         "hour_start": bucket.hour,
-                        "window_seconds": 3600,
+                        "window_start": bucket.hour,
+                        "window_seconds": self.args.window_seconds,
                         "explanation": explanation,
                     }
                 )
@@ -1224,6 +1238,8 @@ class MultiProtocolDetector:
                 "host": host,
                 "protocol": protocol,
                 "hour_start": bucket.hour,
+                "window_start": bucket.hour,
+                "window_seconds": self.args.window_seconds,
                 "phase": "training" if training else "detection",
                 "trained_hours": state.trained_hours,
                 "features": features,
@@ -1244,6 +1260,8 @@ class MultiProtocolDetector:
                 "host": host,
                 "protocol": protocol,
                 "hour_start": bucket.hour,
+                "window_start": bucket.hour,
+                "window_seconds": self.args.window_seconds,
                 "uids": sorted(bucket.uids),
                 "score": round(score, 3),
                 "normalized_score": round(
@@ -1310,6 +1328,8 @@ class MultiProtocolDetector:
                 "host": host,
                 "protocol": protocol,
                 "hour_start": bucket.hour,
+                "window_start": bucket.hour,
+                "window_seconds": self.args.window_seconds,
                 "mode": mode,
                 "score": round(score, 3),
             },
@@ -1378,6 +1398,8 @@ class MultiProtocolDetector:
                 "event": "global_anomaly",
                 "host": host,
                 "hour_start": hour,
+                "window_start": hour,
+                "window_seconds": self.args.window_seconds,
                 "global_score": round(global_score, 4),
                 "confidence": confidence,
                 "protocols": protocols,
@@ -1486,7 +1508,16 @@ def parser(
         "--training-hours",
         type=int,
         default=settings["training_hours"],
-        help="initial traffic-hours assumed benign",
+        help=(
+            "initial observed windows fitted as benign per model; "
+            "0 skips explicit training but still requires --minimum-points"
+        ),
+    )
+    result.add_argument(
+        "--window-seconds",
+        type=int,
+        default=settings["window_seconds"],
+        help="aggregation window size in seconds (default: 3600)",
     )
     result.add_argument(
         "--sensitivity",
@@ -1509,7 +1540,10 @@ def parser(
         help="keep multicast and broadcast flows",
     )
     result.add_argument(
-        "--minimum-points", type=int, default=settings["minimum_points"]
+        "--minimum-points",
+        type=int,
+        default=settings["minimum_points"],
+        help="prior model observations required before a nonzero z-score",
     )
     result.add_argument("--threshold", type=float, default=settings["threshold"])
     result.add_argument(
@@ -1595,7 +1629,7 @@ def parser(
         "--no-terminal-data",
         action="store_true",
         default=not settings["show_terminal_data"],
-        help="hide hourly DATA lines but still show anomalies and summary",
+        help="hide window DATA lines but still show anomalies and summary",
     )
     return result
 
@@ -1618,6 +1652,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         return 2
     if (
         args.training_hours < 0
+        or args.window_seconds < 1
         or args.minimum_points < 1
         or args.protocol_score_cap <= 0
         or not 0 <= args.threshold_quantile <= 1
@@ -1641,15 +1676,16 @@ def main(argv: Optional[list[str]] = None) -> int:
         "MULTI-PROTOCOL ANOMALY DETECTOR",
         f"input={args.zeek_dir} protocols={len(logs)} "
         f"config={args.config} sensitivity={args.sensitivity} "
-        f"training_hours={args.training_hours}",
+        f"training_windows={args.training_hours} "
+        f"window_seconds={args.window_seconds}",
     )
     output.reporter.section(
-        "PROTOCOL-HOUR DATA AND ANOMALIES",
-        "Blue=hourly data, red=protocol anomaly, yellow=reason",
+        "PROTOCOL-WINDOW DATA AND ANOMALIES",
+        "Blue=window data, red=protocol anomaly, yellow=reason",
     )
     output.reporter.section(
-        "TARGET-IP DATA AND ANOMALIES",
-        "Blue=hourly data, red=target anomaly, yellow=reason",
+        "TARGET-IP WINDOW DATA AND ANOMALIES",
+        "Blue=window data, red=target anomaly, yellow=reason",
     )
     output.write(
         "events",
@@ -1660,6 +1696,8 @@ def main(argv: Optional[list[str]] = None) -> int:
             "skipped_non_ip_logs": skipped,
             "configuration": str(args.config),
             "training_hours": args.training_hours,
+            "training_windows": args.training_hours,
+            "window_seconds": args.window_seconds,
             "sensitivity": args.sensitivity,
         },
     )
@@ -1700,6 +1738,8 @@ def main(argv: Optional[list[str]] = None) -> int:
         detector.finalize_targets()
         global_events = detector.ensemble()
         summary = {
+            "window_seconds": args.window_seconds,
+            "training_windows": args.training_hours,
             "records_processed": sum(detector.records_by_protocol.values()),
             "records_by_protocol": dict(sorted(detector.records_by_protocol.items())),
             "records_skipped_without_ip": dict(
@@ -1749,7 +1789,8 @@ def main(argv: Optional[list[str]] = None) -> int:
             ("Records processed", summary["records_processed"]),
             ("Source hosts", summary["hosts"]),
             ("Target IPs", summary["targets"]),
-            ("Training hours", args.training_hours),
+            ("Window seconds", args.window_seconds),
+            ("Training windows", args.training_hours),
             ("Sensitivity", args.sensitivity),
             ("Protocol anomalies", summary["protocol_anomalies"]),
             ("Target anomalies", summary["target_anomalies"]),
@@ -1793,8 +1834,8 @@ def main(argv: Optional[list[str]] = None) -> int:
                 )
                 or "none",
             ),
-            ("Hourly data JSONL", output.paths["data"]),
-            ("Target hourly JSONL", output.paths["target_data"]),
+            ("Window data JSONL", output.paths["data"]),
+            ("Target window JSONL", output.paths["target_data"]),
             ("Flow anomalies JSONL", output.paths["flow"]),
             ("Protocol anomalies JSONL", output.paths["protocol"]),
             ("Target anomalies JSONL", output.paths["target"]),
