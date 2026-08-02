@@ -3,8 +3,9 @@
 ## Running it
 
 ```bash
-python3 multi_protocol_anomaly_detector.py bro/ \
+python3 multi_protocol_anomaly_detector.py /path/to/zeek-logs \
   --config anomaly_detector.conf \
+  --window-seconds 300 \
   --sensitivity 1.0 \
   --training-hours 3
 ```
@@ -18,7 +19,7 @@ or ensemble policy.
 All operating values are stored in
 [`anomaly_detector.conf`](anomaly_detector.conf):
 
-- `[common]` contains default sensitivity and benign training hours;
+- `[common]` contains default sensitivity, window size, and benign training windows;
 - `[common]` also controls whether multicast and broadcast traffic is ignored;
 - `[output]` controls terminal presentation;
 - `[multi_protocol]` configures every protocol model, the specialized SSL
@@ -38,8 +39,21 @@ required protocols          = ceil(configured minimum / sensitivity)
 
 Thus values above `1.0` produce more anomalies and values below `1.0` produce
 fewer. Sensitivity affects both per-protocol decisions and final global-IP
-decisions. Training hours are traffic-time buckets observed for each
-IP/protocol model, not wall-clock time.
+decisions. `window_seconds` sets the aggregation interval and defaults to
+`3600`. Training counts observed windows for each IP/protocol model, not
+wall-clock time. The legacy `training_hours` key therefore means training
+windows when the configured window is not one hour.
+
+Zero has a specific cold-start meaning. With `training_hours = 0`, every
+bucket is labeled as detection, but a feature z-score remains zero until its
+model has `minimum_points` prior observations. Those early observations update
+the model through EWMA. Consequently, the earliest statistically eligible
+bucket for an independent model is
+`max(training_hours, minimum_points) + 1`. Zero training also prevents
+empirical threshold calibration because no values are recorded as benign
+training values; configured fallback thresholds remain active. Specialized
+SSL novelty is an exception: a first-seen server or JA3S can create an
+immediate SSL-flow alert, but that alert does not vote in the global ensemble.
 
 For the complete equations and exact meanings of `value`, `mean`, `zscore`,
 protocol score, normalized contribution, global score, confidence, and EWMA
@@ -65,20 +79,21 @@ These exclusions prevent sensor health or certificate metadata from being
 incorrectly attributed to a client IP.
 
 There is one detector and one SSL model path. SSL records receive the common
-protocol-hour features plus specialized server, JA3/JA3S, and correlated byte
-features. Individual SSL-flow anomalies and SSL protocol-hour anomalies share
-the same training state and feed the same global ensemble.
+protocol-window features plus specialized server, JA3/JA3S, and correlated byte
+features. Individual SSL-flow alerts and SSL protocol-window anomalies share
+per-source SSL state. Only protocol-window anomalies feed the global ensemble;
+individual SSL-flow alerts are supporting evidence and do not vote.
 
 ## Per-protocol detection
 
 Records are sorted by traffic timestamp and grouped by source IP, protocol, and
-traffic hour. The first three observed hours for each IP/protocol pair are
-assumed benign by default.
+traffic window. The first configured number of observed windows for each
+IP/protocol pair are assumed benign when `training_hours` is greater than zero.
 
 Non-SSL protocols produce a common behavioral core:
 
 - `flow_count`: Zeek flows/records for that source IP and protocol in the
-  traffic-hour;
+  traffic window;
 - unique and previously unseen destination IPs;
 - failure ratio.
 
@@ -95,20 +110,20 @@ Equivalent generic SSL counts are omitted to avoid double-counting the same
 behavior in its protocol anomaly score.
 
 Individual `ssl-flow` items are independent alerts. They are not counted as an
-hourly feature and cannot create or amplify a `protocol-hour` anomaly.
+window feature and cannot create or amplify a protocol-window anomaly.
 
 Training uses Welford online moments. Heavy-tailed values are transformed with
 `log1p`. Detection uses median/MAD robust z-scores with a learned noise floor.
 After training, small deviations update the baseline with an EWMA alpha of
 `0.05`; suspicious periods use `0.005` to reduce baseline poisoning.
 
-Only host-hours present in a protocol log are modeled. Missing events are not
+Only host-windows present in a protocol log are modeled. Missing events are not
 invented as zero-valued traffic because a missing Zeek log may mean disabled
 logging rather than genuine absence.
 
 ## Global per-IP ensemble
 
-Protocol anomalies are grouped by source IP and traffic hour. Each protocol
+Protocol anomalies are grouped by source IP and traffic window. Each protocol
 gets at most one vote:
 
 ```text
@@ -148,7 +163,8 @@ expected flows cannot have a UID.
 
 The default `multi_protocol_ad_output` directory contains JSON Lines files:
 
-- `protocol_hourly_data.jsonl`: all feature vectors and z-scores;
+- `protocol_hourly_data.jsonl`: all protocol-window feature vectors and
+  z-scores; the legacy filename is retained for compatibility;
 - `flow_anomalies.jsonl`: specialized individual SSL-flow anomalies;
 - `protocol_anomalies.jsonl`: detailed per-protocol anomalies;
 - `global_anomalies.jsonl`: global per-IP ensemble results;
@@ -157,7 +173,7 @@ The default `multi_protocol_ad_output` directory contains JSON Lines files:
 - `multi_protocol_detector.log`: plain human-readable sections, anomaly
   reasons, protocol contributions, and the final summary.
 
-Hourly data, protocol anomalies, and global anomalies also appear in the
+Window data, protocol anomalies, and global anomalies also appear in the
 terminal. Blue identifies data, red protocol anomalies, magenta global
 anomalies, yellow reasons/contributions, and green/yellow summary rows. Colors
 are enabled automatically on a TTY and can be controlled with `--color`.
