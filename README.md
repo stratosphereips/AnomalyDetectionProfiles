@@ -1,23 +1,8 @@
 # Unified Zeek anomaly detector
 
-`multi_protocol_anomaly_detector.py` is the only detector program. It analyzes
-all IP-attributable Zeek protocols, performs specialized SSL flow alerting and
-hourly detection, and combines protocol-hour anomalies into global per-IP
-anomalies.
+<img width="1412" height="762" alt="image" src="https://github.com/user-attachments/assets/6588e94b-9303-4aa7-a676-ad84041f27ef" />
 
-## Running the detector
-
-```bash
-python3 multi_protocol_anomaly_detector.py bro/ \
-  --config anomaly_detector.conf \
-  --sensitivity 1.0 \
-  --training-hours 3
-```
-
-The input must be a Zeek log directory. The detector automatically correlates
-`ssl.log` and `conn.log` by UID.
-
-### Local web dashboard
+### Run using the local web dashboard
 
 Start the full-width configuration and results dashboard:
 
@@ -43,6 +28,26 @@ importance because global scores commonly saturate at `1.0`.
 
 Each dashboard execution uses a private configuration snapshot under
 `.dashboard_runs/`; it does not modify `anomaly_detector.conf`.
+
+# Direct detection run without dashboard
+`multi_protocol_anomaly_detector.py` is the only detector program. It analyzes
+all IP-attributable Zeek protocols, performs specialized SSL flow alerting and
+hourly detection, and combines protocol-hour anomalies into global per-IP
+anomalies.
+
+## Running the detector
+
+```bash
+python3 multi_protocol_anomaly_detector.py bro/ \
+  --config anomaly_detector.conf \
+  --sensitivity 1.0 \
+  --training-hours 3
+```
+
+The input must be a Zeek log directory. The detector automatically correlates
+`ssl.log` and `conn.log` by UID.
+
+
 
 ## Detection levels
 
