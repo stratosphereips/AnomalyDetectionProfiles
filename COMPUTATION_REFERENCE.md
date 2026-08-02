@@ -9,9 +9,9 @@ _Exact equations and value definitions implemented by the unified multi-protocol
 ```mermaid
 flowchart LR
     accTitle: Anomaly Score Computation Pipeline
-    accDescr: Zeek records become host-hour feature values, transformed model inputs, robust z-scores, protocol anomalies, and finally global per-IP ensemble anomalies
+    accDescr: Zeek records become host-window feature values, transformed model inputs, robust z-scores, protocol anomalies, and finally global per-IP ensemble anomalies
 
-    records[📥 Read Zeek records] --> group[🗂️ Group by IP protocol hour]
+    records[📥 Read Zeek records] --> group[🗂️ Group by IP protocol window]
     group --> value[📊 Compute raw value]
     value --> transform[⚙️ Apply log1p]
     transform --> score[🔍 Compute robust z-score]
@@ -58,7 +58,7 @@ detector update the model.
 `x` is the actual value measured from the Zeek logs. Examples are:
 
 - `x = 12000` for a flow containing 12,000 bytes
-- `x = 35` for 35 DNS requests in one hour
+- `x = 35` for 35 DNS requests in one configured window
 - `x = 0.20` for a 20% failure ratio
 
 This raw value is also the `value` shown in anomaly output.
@@ -128,17 +128,59 @@ average of the raw values.
 
 ## 🎓 Benign training
 
-`--training-hours N` controls the initial assume-benign period.
+`--training-hours N` controls the initial assume-benign period. The name is
+retained for configuration compatibility; `N` counts observed windows.
 
 - The specialized SSL path trains as the SSL model for each source IP.
 - The multi-protocol detector trains independently for each
   `(source IP, protocol)` pair.
-- An hour is `floor(Zeek ts / 3600) * 3600`.
-- Only hours containing records for that model count toward training.
-- Missing hours are not inserted as zero-valued observations.
+- For window size \(W\), a window starts at
+  `floor(Zeek ts / W) * W`.
+- Only windows containing records for that model count toward training.
+- Missing windows are not inserted as zero-valued observations.
 - No anomaly is emitted while that specific model is training.
-- The first post-training observation is scored against the completed benign
-  baseline.
+- After training, statistical detection remains suppressed until the model has
+  at least `minimum_points` prior observations.
+
+For an observed bucket numbered from one, the first bucket eligible for a
+nonzero statistical z-score is therefore:
+
+$$
+b_{\mathrm{eligible}} =
+  \max(\mathrm{trainingHours},\mathrm{minimumPoints}) + 1.
+$$
+
+This eligibility is independent for every source-IP/protocol feature model
+and every target-IP feature model. Eligibility does not guarantee an anomaly;
+the resulting z-score must still reach its effective threshold.
+
+### Zero training hours
+
+`training_hours = 0` skips the explicit assume-benign branch. From the first
+bucket, output records use `phase = "detection"`, and `trained_hours` remains
+zero. This does not eliminate the need for a baseline. While model count is
+below `minimum_points`, `robust_zscore` returns zero, no statistical reason is
+emitted, and the observation updates the model with the ordinary
+post-detection EWMA rule. The first observation initializes the mean and count;
+subsequent observations use `drift_alpha` while the anomaly score remains zero.
+
+Because the Welford training branch is never entered, `training_values` stays
+empty and empirical quantile calibration is not performed. Feature decisions
+therefore use the configured fallback threshold. For example, with
+`training_hours = 0` and `minimum_points = 8`, buckets one through eight seed
+the adaptive baseline with z-score zero, and bucket nine is the first eligible
+for a statistical anomaly.
+
+Specialized SSL novelty does not use `minimum_points`. With zero training, the
+first SSL flow to a previously unseen server or with a previously unseen JA3S
+may immediately produce an `ssl-flow` alert when its novelty gate is met. This
+is a flow alert, not a protocol-window anomaly, and it does not contribute to the
+global ensemble. SSL byte-volume alerts still require `minimum_points` prior
+byte observations for the same known server.
+
+Zero training is thus an adaptive cold start, not baseline-free anomaly
+detection. It is appropriate only when no trusted benign prefix is available;
+the earliest observations necessarily influence the baseline.
 
 For each transformed benign value \(y_n\), training uses Welford moments:
 
@@ -342,19 +384,19 @@ not emit.
 
 Bytes are scored only when the server is already known and its byte model has
 at least `minimum_points`. The first flow to a server can establish its byte
-baseline, but is excluded from `known_server_avg_bytes` for that hour.
+baseline, but is excluded from `known_server_avg_bytes` for that window.
 
-### SSL hourly values
+### SSL window values
 
 | Feature | Exact raw value \(x\) |
 | ------- | --------------------- |
-| `ssl_flows` | Number of SSL records from the source IP in the hour |
+| `ssl_flows` | Number of SSL records from the source IP in the window |
 | `unique_servers` | Number of distinct SNI values, falling back to destination IP |
 | `new_servers` | Number of servers never previously observed for the source IP |
 | `ja3_changes` | Count of first-seen JA3 values for their server |
 | `known_server_avg_bytes` | Bytes for flows to already-known servers divided by their flow count; `0` when none exist |
 
-Each feature has an independent adaptive model. One hourly anomaly may contain
+Each feature has an independent adaptive model. One window anomaly may contain
 multiple reasons and z-scores.
 
 ### SSL anomaly confidence
@@ -369,7 +411,7 @@ $$
 $$
 
 The current anomaly is inserted into history before confidence is computed.
-If \(a_3\) is the number of anomalies in the preceding three traffic-hours,
+If \(a_3\) is the number of anomalies in the preceding three elapsed hours,
 including the current anomaly:
 
 $$
@@ -387,8 +429,8 @@ $$
   \min(1,n_{\mathrm{baseline}}/n_{\mathrm{stable}}).
 $$
 
-Flow confidence uses the larger of the host-hour count and relevant
-server-byte count. Hourly confidence uses the minimum count across hourly
+Flow confidence uses the larger of the host-window count and relevant
+server-byte count. Window confidence uses the minimum count across window
 feature models.
 
 For \(R\) anomaly reasons:
@@ -415,12 +457,12 @@ $$
 | `medium` | \(0.55 \le C < 0.80\) |
 | `high` | \(C \ge 0.80\) |
 
-### SSL hourly anomaly score
+### SSL window anomaly score
 
-If an hourly feature crosses its threshold, its z-score becomes a reason:
+If a window feature crosses its threshold, its z-score becomes a reason:
 
 $$
-A_{\mathrm{hour}} =
+A_{\mathrm{window}} =
   \sum_{j \in \mathrm{anomalous\ features}} z_j.
 $$
 
@@ -429,16 +471,16 @@ instead combines severity, persistence, baseline maturity, and signal count.
 
 ## 🌐 Multi-protocol values
 
-Every non-SSL source-IP/protocol/hour has four common raw features.
+Every non-SSL source-IP/protocol/window has four common raw features.
 
 | Feature | Exact raw value \(x\) |
 | ------- | --------------------- |
-| `flow_count` | Number of Zeek flows/records for one source IP and one protocol in the traffic-hour |
+| `flow_count` | Number of Zeek flows/records for one source IP and one protocol in the configured window |
 | `unique_peers` | Number of distinct destination IPs |
 | `new_peers` | Destination IPs never seen for this source-IP/protocol pair |
 | `failure_ratio` | Records matching the failure rule divided by `max(1, flow_count)` |
 
-SSL instead uses the specialized hourly values in the previous section,
+SSL instead uses the specialized window values in the previous section,
 `failure_ratio`, and the `unique_F`/`new_F` features for TLS version, cipher,
 JA3, JA3S, and validation status. Generic `flow_count`, peer counts, and
 server-name counts are not also added for SSL because they would duplicate
@@ -448,7 +490,7 @@ For each configured categorical field `F`:
 
 $$
 \mathrm{unique\_F} =
-  |\{\text{distinct non-empty F values this hour}\}|,
+  |\{\text{distinct non-empty F values this window}\}|,
 $$
 
 $$
@@ -513,7 +555,7 @@ The ensemble uses the capped normalized protocol score, not severity.
 
 ## 🧠 Global per-IP ensemble
 
-Protocol anomalies are grouped by source IP and traffic hour. Each protocol
+Protocol anomalies are grouped by source IP and traffic window. Each protocol
 contributes at most once.
 
 With protocol score cap \(K\), normally `10`:
@@ -564,7 +606,7 @@ $$
 
 ### Ensemble example
 
-Assume DNS score `4.0`, HTTP score `3.0`, cap `10`, and the same IP/hour:
+Assume DNS score `4.0`, HTTP score `3.0`, cap `10`, and the same IP/window:
 
 $$
 c_{\mathrm{DNS}} = 4/10 = 0.4,
@@ -630,7 +672,7 @@ Importance levels are:
 | `high` | `60` to below `80` |
 | `critical` | `80` to `100` |
 
-The dashboard sorts SSL-flow and protocol-hour anomalies by `total_score`
+The dashboard sorts SSL-flow and protocol-window anomalies by `total_score`
 descending. Global anomalies default to `importance_score` descending because
 that ranking preserves deviation magnitude, protocol corroboration, and
 reason breadth even when several `global_score` values equal `1.0`. The user
@@ -665,23 +707,23 @@ anomalous behavior enters the baseline.
 | Reasons no greater than `ssl_max_small_anomalies` | `drift_alpha`, default `0.05` |
 | More reasons | `suspicious_alpha`, default `0.005` |
 
-### SSL hourly adaptation
+### SSL window adaptation
 
-An SSL hour is small drift when:
+An SSL window is small drift when:
 
 $$
-A_{\mathrm{hour}} \le \mathrm{adaptationScore}.
+A_{\mathrm{window}} \le \mathrm{adaptationScore}.
 $$
 
-Small drift uses `drift_alpha`; other hours use `suspicious_alpha`.
+Small drift uses `drift_alpha`; other windows use `suspicious_alpha`.
 
-Individual `ssl-flow` anomalies do not enter the hourly feature vector,
-hourly score, hourly adaptation decision, or global ensemble. This prevents
+Individual `ssl-flow` anomalies do not enter the window feature vector,
+window score, window adaptation decision, or global ensemble. This prevents
 the same evidence from being counted at multiple detection levels.
 
 ### Multi-protocol adaptation
 
-A protocol hour uses `drift_alpha` when:
+A protocol window uses `drift_alpha` when:
 
 $$
 A_p \le \mathrm{adaptationScore}.
@@ -699,22 +741,28 @@ Command-line `--sensitivity` and `--training-hours` override `[common]`.
 Explicit command-line options for other settings override their configured
 values.
 
+The values in the following tables are built-in fallbacks used when a setting
+is absent. Values explicitly present in `anomaly_detector.conf`, a selected
+configuration file, or command-line overrides are the effective values for a
+run. The dashboard displays and snapshots those effective configured values.
+
 ### Common and output settings (`[common]`, `[output]`)
 
-| Setting | Default | Exact role |
+| Setting | Built-in fallback | Exact role |
 | ------- | ------: | ---------- |
-| `training_hours` | `3` | Observed traffic-hour buckets assumed benign for each independent model |
+| `training_hours` | `3` | Legacy key: number of observed windows assumed benign for each independent model; zero selects adaptive cold start |
+| `window_seconds` | `3600` | Width of every aggregation window; `300` selects five-minute windows |
 | `sensitivity` | `1.0` | Divisor applied to anomaly thresholds and global protocol-count gate |
 | `color` | `auto` | `auto`, `always`, or `never` terminal ANSI colors; does not affect detection |
-| `show_terminal_data` | `true` | Prints hourly `DATA` rows; logs are written regardless |
+| `show_terminal_data` | `true` | Prints window-level `DATA` rows; logs are written regardless |
 | `quiet` | `false` | Suppresses per-event terminal rows while retaining the summary |
 
 ### SSL-specific settings (inside `[multi_protocol]`)
 
-| Setting | Default | Exact role |
+| Setting | Built-in fallback | Exact role |
 | ------- | ------: | ---------- |
 | `minimum_points` | `3` | Required model count before a nonzero z-score can be returned |
-| `ssl_hourly_threshold` | `3.5` | Fallback \(T\) for specialized SSL hourly features |
+| `ssl_hourly_threshold` | `3.5` | Legacy key: fallback \(T\) for specialized SSL window features |
 | `ssl_flow_threshold` | `3.5` | Fallback \(T\) for per-server byte z-scores |
 | `ssl_novelty_threshold` | `1.5` | Base gate compared with implicit novelty evidence `2.0` |
 | `ssl_baseline_alpha` | `0.10` | EWMA \(\alpha\) for a post-training SSL flow with no anomaly reason |
@@ -722,14 +770,14 @@ values.
 
 ### Multi-protocol and ensemble settings (`[multi_protocol]`)
 
-| Setting | Default | Exact role |
+| Setting | Built-in fallback | Exact role |
 | ------- | ------: | ---------- |
 | `minimum_points` | `3` | Required model count before a nonzero feature z-score |
-| `threshold` | `3.5` | Fallback \(T\) for every protocol-hour feature |
+| `threshold` | `3.5` | Fallback \(T\) for every protocol-window feature |
 | `threshold_quantile` | `0.995` | \(q\) used for empirical benign threshold calibration |
 | `drift_alpha` | `0.05` | EWMA \(\alpha\) when protocol score is at most `adaptation_score` |
 | `suspicious_alpha` | `0.005` | EWMA \(\alpha\) when protocol score exceeds `adaptation_score` |
-| `adaptation_score` | `8.0` | Boundary between drift and suspicious protocol-hour updates |
+| `adaptation_score` | `8.0` | Boundary between drift and suspicious protocol-window updates |
 | `protocol_score_cap` | `10.0` | \(K\), maximum protocol score counted by the ensemble |
 | `global_threshold` | `0.65` | \(T_G\), global score gate before sensitivity |
 | `minimum_protocols` | `2` | \(P_{\min}\), corroborating protocol-count gate before sensitivity |
@@ -750,7 +798,7 @@ Every emitted anomaly contains `responsible_flow_count` and
 - A numeric total or average reason ranks records by that numeric field in the
   anomalous direction.
 - A unique-value reason selects representative records for distinct values.
-- An event-count reason attributes all records in the anomalous hour.
+- An event-count reason attributes all records in the anomalous window.
 - A global anomaly carries representative flows from every contributing
   protocol anomaly.
 
@@ -792,11 +840,14 @@ absence relative to the baseline is itself the evidence.
 | `threshold` | Effective threshold after calibration and sensitivity |
 | Protocol `score` | Sum of anomalous feature z-scores |
 | `normalized_score` | Capped protocol score divided by its cap |
-| SSL `anomaly_score` | Sum of anomalous hourly feature z-scores |
+| SSL `anomaly_score` | Sum of anomalous window-feature z-scores |
 | SSL `confidence.score` | Weighted confidence equation bounded to `[0,1]` |
 | `global_score` | Contributions plus corroboration, bounded to `[0,1]` |
 | `phase` | `training` or `detection` for that model |
-| `trained_hours` | Completed observed benign hours already fitted |
+| `trained_hours` | Legacy field: completed observed benign windows already fitted |
+| `window_start` | Epoch timestamp at the start of the configured window |
+| `window_seconds` | Configured width of the aggregation window |
+| `hour_start` | Compatibility alias for `window_start`; retained for existing consumers |
 | `responsible_flow_count` | Total matching Zeek records before representative-flow truncation |
 | `responsible_flows` | Traceable representative records with UID, endpoints, details, and matched reasons |
 
