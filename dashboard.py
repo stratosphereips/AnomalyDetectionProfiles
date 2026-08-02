@@ -313,6 +313,13 @@ def resolve_local_path(raw_path: str) -> Path:
     return path.resolve()
 
 
+def has_supported_zeek_logs(path: Path) -> bool:
+    return any(
+        log_path.is_file() and log_path.stem in DETECTED_LOGS
+        for log_path in path.glob("*.log")
+    )
+
+
 def inspect_zeek_folder(raw_path: str) -> dict[str, Any]:
     path = resolve_local_path(raw_path)
     if not path.is_dir():
@@ -361,8 +368,8 @@ def run_detector(payload: dict[str, Any]) -> dict[str, Any]:
     zeek_dir = resolve_local_path(str(payload.get("zeek_dir", "")))
     if not zeek_dir.is_dir():
         raise ValueError(f"Zeek directory does not exist: {zeek_dir}")
-    if not (zeek_dir / "ssl.log").is_file() or not (zeek_dir / "conn.log").is_file():
-        raise ValueError("The selected folder must contain at least ssl.log and conn.log")
+    if not has_supported_zeek_logs(zeek_dir):
+        raise ValueError("The selected folder contains no supported Zeek protocol logs")
 
     run_id = time.strftime("%Y%m%d-%H%M%S") + f"-{time.time_ns() % 1_000_000:06d}"
     run_root = RUNS_DIR / run_id
@@ -523,8 +530,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
                             {
                                 "name": child.name,
                                 "path": str(child.resolve()),
-                                "is_zeek": (child / "ssl.log").is_file()
-                                and (child / "conn.log").is_file(),
+                                "is_zeek": has_supported_zeek_logs(child),
                             }
                         )
             except PermissionError:
@@ -534,8 +540,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 {
                     "path": str(path),
                     "parent": str(path.parent),
-                    "is_zeek": (path / "ssl.log").is_file()
-                    and (path / "conn.log").is_file(),
+                    "is_zeek": has_supported_zeek_logs(path),
                     "directories": sorted(
                         directories, key=lambda item: item["name"].lower()
                     ),
