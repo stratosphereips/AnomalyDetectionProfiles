@@ -112,6 +112,25 @@ class DashboardTests(unittest.TestCase):
                 "new_server",
             )
 
+    def test_dashboard_runs_without_ssl_or_conn_logs(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            zeek = root / "zeek"
+            zeek.mkdir()
+            write_zeek_log(
+                zeek / "dns.log",
+                ["ts", "uid", "id.orig_h", "id.resp_h", "query", "qtype_name"],
+                ["1", "D1", "10.0.0.1", "1.1.1.1", "example.test", "A"],
+            )
+            config = dashboard.read_config(dashboard.DEFAULT_CONFIG)
+            config["common"]["training_hours"] = 0
+            with patch.object(dashboard, "RUNS_DIR", root / "runs"):
+                result = dashboard.run_detector(
+                    {"zeek_dir": str(zeek), "config": config}
+                )
+            self.assertEqual(result["summary"]["records_processed"], 1)
+            self.assertEqual(result["hourly_data"][0]["protocol"], "dns")
+
     def test_capture_hours_ignore_non_detected_metadata_logs(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
