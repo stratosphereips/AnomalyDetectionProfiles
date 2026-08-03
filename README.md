@@ -150,5 +150,6 @@ All model and output settings are in
 
 See:
 
+- [Interactive guide: how the complete detector works](docs/index.html)
 - [Multi-protocol design and ensemble](MULTI_PROTOCOL_ANOMALY_DETECTION.md)
 - [Exact values and equations](COMPUTATION_REFERENCE.md)
