@@ -330,6 +330,30 @@
         <p>When fewer than seven historical values are retained, the detector uses distance from the mean divided by the larger of standard deviation or the learned noise floor. With seven or more values, it uses the median and median absolute deviation (MAD), which are more resistant to outliers.</p>
         <div class="formula">robust_std = max(1.4826 × MAD, minimum_noise_floor)<br>z = |current_transformed_value − historical_median| / robust_std</div>
 
+        <h3>What exactly is the adaptive minimum noise floor?</h3>
+        <p>The noise floor is a lower bound on the denominator of the z-score. It answers: <strong>“Even when the historical values look almost identical, how much ordinary small movement should this feature tolerate?”</strong> It is stored separately inside every feature model and operates in transformed <code>ln(1+x)</code> space.</p>
+        <div class="callout warn"><strong>The problem it prevents:</strong> suppose historical dispersion is only 0.002 and the current value differs by 0.03. Without a floor, <code>z = 0.03 / 0.002 = 15</code>, an extreme anomaly caused by a very small change. With a floor of 0.1, <code>z = 0.03 / 0.1 = 0.3</code>. The floor prevents nearly constant training data, rounding, or harmless jitter from creating unstable scores.</div>
+
+        <h3>How the floor is computed</h3>
+        <p>Before an observation updates the mean, the detector measures its absolute residual against the old mean:</p>
+        <div class="formula">residual r = |current transformed value y − mean before update|</div>
+        <p>It keeps the most recent 64 residuals. Until at least five residuals exist, the floor remains at its initial value of <code>0.1</code>. After that, it calculates:</p>
+        <div class="formula">q10 = 10th percentile of recent residuals<br>residual_median = median(recent residuals)<br>residual_MAD = median(|each residual − residual_median|)<br>candidate_floor = max(0.01, q10, 1.4826 × residual_MAD)<br>new_floor = 0.95 × old_floor + 0.05 × candidate_floor</div>
+        <div class="table-wrap"><table>
+          <thead><tr><th>Term</th><th>Why it participates</th></tr></thead>
+          <tbody>
+            <tr><td><code>0.01</code></td><td>Absolute safety minimum in transformed space. The denominator can never collapse to zero.</td></tr>
+            <tr><td><code>q10</code></td><td>A low percentile of actual recent errors. It estimates a small but repeatedly observed background mismatch while resisting a few very large outliers.</td></tr>
+            <tr><td><code>1.4826 × residual_MAD</code></td><td>A robust estimate of how variable the residuals themselves are. It grows when ordinary prediction errors have a wider spread.</td></tr>
+            <tr><td><code>max(...)</code></td><td>Chooses the most conservative of the three protections, ensuring the denominator is not unrealistically small.</td></tr>
+            <tr><td><code>0.95 old + 0.05 candidate</code></td><td>Moves only 5% toward the new candidate each observation, so the floor adapts gradually instead of jumping because of one window.</td></tr>
+          </tbody>
+        </table></div>
+        <p>During scoring, this floor competes with the dispersion estimated from historical feature values:</p>
+        <div class="formula">fewer than 7 retained values: denominator = max(standard deviation, noise floor)<br>7 or more retained values: denominator = max(1.4826 × feature MAD, noise floor)</div>
+        <p>If normal traffic is genuinely noisy, recent residuals can raise the floor and reduce false positives. If traffic becomes steadier, the floor can decrease, but only gradually and never below 0.01. Because suspicious observations also produce residuals, persistent changed behavior can eventually affect the floor; the short 64-residual buffer, robust percentiles/MAD, and 5% update rate limit the effect of isolated spikes.</p>
+        <div class="callout"><strong>How to interpret 0.1:</strong> it is not “0.1 packets” or “0.1 bytes.” It is 0.1 in logarithmic space. A log-space difference of 0.1 corresponds approximately to a factor of <code>e^0.1 ≈ 1.105</code> in <code>1+x</code>, or roughly a 10.5% multiplicative difference near the current scale.</div>
+
         <h3>Step C — compare with the effective threshold</h3>
         <p>After at least ten benign training values, the detector can calibrate the threshold from the configured benign quantile. Otherwise, it uses the configured fallback threshold.</p>
         <div class="formula">effective_threshold = learned_or_fallback_threshold / sensitivity</div>
@@ -348,7 +372,7 @@
             <tr><td><code>y</code></td><td><code>ln(1+x)</code> for the current raw feature.</td><td>Equation 4 compares it with historical normal.</td></tr>
             <tr><td><code>m</code></td><td>Median of retained historical transformed values: <code>median(y₁…yₙ)</code>.</td><td>Equation 4 calculates current deviation.</td></tr>
             <tr><td><code>d</code></td><td>Historical MAD: <code>median(|yᵢ−m|)</code>.</td><td>Equation 2 estimates robust historical spread.</td></tr>
-            <tr><td><code>f</code></td><td>Adaptive minimum noise floor learned from recent residuals; initially 0.1.</td><td>Equation 3 stops a tiny MAD from creating an extreme score.</td></tr>
+            <tr><td><code>f</code></td><td>Adaptive lower bound on normal spread. It starts at 0.1 and moves 5% toward <code>max(0.01, residual q10, 1.4826 × residual MAD)</code> after each observation once five residuals exist.</td><td>Equation 3 stops a tiny MAD from creating an extreme score.</td></tr>
             <tr><td><code>T</code></td><td>Empirically calibrated benign threshold when enough training values exist; otherwise the configured fallback.</td><td>Equation 6 sets the decision boundary.</td></tr>
             <tr><td><code>S</code></td><td>The configured global sensitivity.</td><td>Equation 6 divides the threshold; larger S means easier detection.</td></tr>
           </tbody>
