@@ -561,7 +561,12 @@
         $("results").innerHTML = `<div class="empty">Documentation is unavailable.</div>`;
         return;
       }
-      $("results").innerHTML = state.docs.map(doc => `
+      const guide = `<section class="doc-page">
+        <div class="chart-head"><h2>How anomaly detection works</h2><span>Interactive learning guide</span></div>
+        <div class="doc-body"><p>Follow a Zeek record through feature extraction, training, robust scoring, attribution, adaptation, and the global ensemble.</p>
+        <p><a href="/docs/" target="_blank" rel="noopener">Open the complete illustrated guide and score calculator →</a></p></div>
+      </section>`;
+      $("results").innerHTML = guide + state.docs.map(doc => `
         <section class="doc-page">
           <div class="chart-head"><h2>${esc(doc.title)}</h2><span>${esc(doc.name)}</span></div>
           <div class="help">This is the source markdown rendered as a readable document inside the workbench.</div>
