@@ -194,6 +194,9 @@ class DashboardTests(unittest.TestCase):
         self.assertIn("<h1>Title</h1>", rendered)
         self.assertIn("<ul><li>one</li><li>two</li></ul>", rendered)
         self.assertNotIn("# Title", rendered)
+        code = dashboard.markdown_to_html("```python\nprint('ok')\n```\n")
+        self.assertIn('class="language-python"', code)
+        self.assertIn("print(&#x27;ok&#x27;)", code)
 
     def test_write_run_config_persists_current_settings(self):
         with tempfile.TemporaryDirectory() as temp:
