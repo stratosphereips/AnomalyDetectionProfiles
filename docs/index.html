@@ -125,8 +125,19 @@
     .calc-grid { display: grid; grid-template-columns: repeat(4, minmax(110px, 1fr)); gap: 0.8rem; }
     label { display: block; color: var(--muted); font-size: 0.82rem; font-weight: 700; }
     input { width: 100%; margin-top: 0.25rem; padding: 0.62rem; border: 1px solid #bdc9da; border-radius: 7px; color: var(--ink); background: white; font: inherit; }
-    .calc-output { margin-top: 1rem; padding: 1rem; border-radius: 10px; background: var(--code); color: #e5edf8; }
-    .calc-output strong { color: #8eb8ff; }
+    input[readonly] { color: #174281; background: var(--blue-soft); font-weight: 800; }
+    .symbol { display: inline-grid; place-items: center; min-width: 1.55rem; height: 1.55rem; margin-right: 0.3rem; padding: 0 0.35rem; border-radius: 6px; color: white; background: var(--violet); font: 800 0.78rem/1 ui-monospace, monospace; }
+    .input-use { display: block; margin-top: 0.28rem; color: #75839a; font-size: 0.72rem; font-weight: 550; }
+    .calc-output { margin-top: 1.2rem; color: var(--ink); }
+    .calc-output h4 { margin: 0 0 0.7rem; font-size: 1rem; }
+    .equation-trace { display: grid; gap: 0.55rem; }
+    .equation-step { display: grid; grid-template-columns: 2rem minmax(0, 1fr); gap: 0.75rem; align-items: start; padding: 0.8rem 0.9rem; border: 1px solid #d6deea; border-radius: 9px; background: white; }
+    .eq-number { display: grid; place-items: center; width: 2rem; height: 2rem; border-radius: 50%; color: white; background: var(--blue); font-weight: 850; }
+    .eq-title { color: var(--muted); font-size: 0.76rem; font-weight: 750; text-transform: uppercase; letter-spacing: 0.05em; }
+    .eq-formula { margin-top: 0.2rem; color: #15345e; font: 750 0.93rem/1.55 ui-monospace, monospace; overflow-wrap: anywhere; }
+    .eq-meaning { margin-top: 0.18rem; color: var(--muted); font-size: 0.8rem; }
+    .equation-step.final { border: 2px solid var(--violet); background: var(--violet-soft); }
+    .chosen { padding: 0.08rem 0.32rem; border-radius: 4px; color: #07543e; background: #c9f2e3; }
     .verdict { display: inline-block; margin-left: 0.4rem; padding: 0.15rem 0.5rem; border-radius: 999px; font-weight: 800; }
     .verdict.anomaly { color: #7f1d1d; background: #fecaca; }
     .verdict.normal { color: #064e3b; background: #a7f3d0; }
@@ -328,16 +339,30 @@
           <div class="node yes"><strong>z ≥ threshold</strong><br>feature becomes an anomaly reason</div>
         </div>
 
-        <h3>Try a transformed-space score</h3>
-        <p>This calculator shows the exact robust comparison. Values are in transformed space, after <code>ln(1+x)</code>.</p>
+        <h3>Follow every value through the equations</h3>
+        <p>Change any white input. The blue <strong>current transformed value</strong> is calculated from the raw value. The trace below substitutes every number into the exact equation that uses it.</p>
+        <div class="table-wrap"><table>
+          <thead><tr><th>Symbol</th><th>Where the value comes from</th><th>Where it is used</th></tr></thead>
+          <tbody>
+            <tr><td><code>x</code></td><td>The raw feature measured in the current window, such as 50 DNS records.</td><td>Equation 1 transforms it into <code>y</code>.</td></tr>
+            <tr><td><code>y</code></td><td><code>ln(1+x)</code> for the current raw feature.</td><td>Equation 4 compares it with historical normal.</td></tr>
+            <tr><td><code>m</code></td><td>Median of retained historical transformed values: <code>median(y₁…yₙ)</code>.</td><td>Equation 4 calculates current deviation.</td></tr>
+            <tr><td><code>d</code></td><td>Historical MAD: <code>median(|yᵢ−m|)</code>.</td><td>Equation 2 estimates robust historical spread.</td></tr>
+            <tr><td><code>f</code></td><td>Adaptive minimum noise floor learned from recent residuals; initially 0.1.</td><td>Equation 3 stops a tiny MAD from creating an extreme score.</td></tr>
+            <tr><td><code>T</code></td><td>Empirically calibrated benign threshold when enough training values exist; otherwise the configured fallback.</td><td>Equation 6 sets the decision boundary.</td></tr>
+            <tr><td><code>S</code></td><td>The configured global sensitivity.</td><td>Equation 6 divides the threshold; larger S means easier detection.</td></tr>
+          </tbody>
+        </table></div>
+        <div class="callout warn"><strong>Which scoring branch is this?</strong> This live trace shows the robust median/MAD branch used when at least seven historical values are retained. With fewer than seven, the code uses the same decision chain but replaces <code>m</code> with the running mean and <code>robust_std</code> with <code>max(standard deviation, noise floor)</code>.</div>
         <div class="calculator">
           <div class="calc-grid">
-            <label>Current transformed value<input id="current" type="number" step="0.01" value="3.93"></label>
-            <label>Historical median<input id="median" type="number" step="0.01" value="2.40"></label>
-            <label>Historical MAD<input id="mad" type="number" step="0.01" value="0.087"></label>
-            <label>Noise floor<input id="floor" type="number" min="0.001" step="0.01" value="0.10"></label>
-            <label>Base threshold<input id="threshold" type="number" min="0.01" step="0.1" value="3.5"></label>
-            <label>Sensitivity<input id="sensitivity" type="number" min="0.01" step="0.1" value="1.0"></label>
+            <label><span class="symbol">x</span>Raw current feature<input id="rawCurrent" type="number" step="1" value="50"><span class="input-use">Used in equation 1: transform</span></label>
+            <label><span class="symbol">y</span>Current transformed value<input id="current" type="number" value="3.9318" readonly><span class="input-use">Output of equation 1; used in equations 4–5</span></label>
+            <label><span class="symbol">m</span>Historical median<input id="median" type="number" step="0.01" value="2.40"><span class="input-use">Used in equations 4–5</span></label>
+            <label><span class="symbol">d</span>Historical MAD<input id="mad" type="number" min="0" step="0.001" value="0.087"><span class="input-use">Used in equation 2</span></label>
+            <label><span class="symbol">f</span>Noise floor<input id="floor" type="number" min="0.001" step="0.01" value="0.10"><span class="input-use">Used in equation 3</span></label>
+            <label><span class="symbol">T</span>Base threshold<input id="threshold" type="number" min="0.01" step="0.1" value="3.5"><span class="input-use">Used in equation 6</span></label>
+            <label><span class="symbol">S</span>Sensitivity<input id="sensitivity" type="number" min="0.01" step="0.1" value="1.0"><span class="input-use">Used in equation 6</span></label>
           </div>
           <div id="calcResult" class="calc-output" aria-live="polite"></div>
         </div>
@@ -448,19 +473,45 @@
   <footer class="footer">AnomalyDetectionProfiles · Explainable, adaptive anomaly detection over Zeek logs</footer>
 
   <script>
-    const calculatorInputs = ["current", "median", "mad", "floor", "threshold", "sensitivity"];
+    const calculatorInputs = ["rawCurrent", "median", "mad", "floor", "threshold", "sensitivity"];
 
     function updateCalculator() {
       const value = Object.fromEntries(calculatorInputs.map(id => [id, Number(document.getElementById(id).value)]));
-      const robustStd = Math.max(1.4826 * Math.max(0, value.mad), Math.max(0.001, value.floor));
-      const z = Math.abs(value.current - value.median) / robustStd;
+      const current = Math.log1p(Math.max(0, value.rawCurrent));
+      document.getElementById("current").value = current.toFixed(4);
+      const scaledMad = 1.4826 * Math.max(0, value.mad);
+      const safeFloor = Math.max(0.001, value.floor);
+      const robustStd = Math.max(scaledMad, safeFloor);
+      const deviation = Math.abs(current - value.median);
+      const z = deviation / robustStd;
       const effective = value.threshold / Math.max(0.01, value.sensitivity);
       const anomaly = z >= effective;
+      const spreadSource = scaledMad >= safeFloor ? "scaled MAD" : "noise floor";
+      const comparison = anomaly ? "≥" : "<";
       document.getElementById("calcResult").innerHTML =
-        `<strong>robust_std</strong> = ${robustStd.toFixed(4)} &nbsp; ` +
-        `<strong>z-score</strong> = ${z.toFixed(3)} &nbsp; ` +
-        `<strong>effective threshold</strong> = ${effective.toFixed(3)} ` +
-        `<span class="verdict ${anomaly ? "anomaly" : "normal"}">${anomaly ? "ANOMALY REASON" : "NO REASON"}</span>`;
+        `<h4>Live equation trace</h4><div class="equation-trace">` +
+        `<div class="equation-step"><span class="eq-number">1</span><div><div class="eq-title">Transform the raw feature</div>` +
+        `<div class="eq-formula">y = ln(1 + max(0, x)) = ln(1 + max(0, ${value.rawCurrent.toFixed(4)})) = ${current.toFixed(4)}</div>` +
+        `<div class="eq-meaning">Input used: raw feature <strong>x</strong>. Output produced: transformed current value <strong>y</strong>.</div></div></div>` +
+        `<div class="equation-step"><span class="eq-number">2</span><div><div class="eq-title">Convert MAD to a robust standard deviation candidate</div>` +
+        `<div class="eq-formula">scaled_MAD = 1.4826 × d = 1.4826 × ${Math.max(0, value.mad).toFixed(4)} = ${scaledMad.toFixed(4)}</div>` +
+        `<div class="eq-meaning">Input used: historical MAD <strong>d</strong>. The factor 1.4826 makes MAD comparable to standard deviation for approximately normal data.</div></div></div>` +
+        `<div class="equation-step"><span class="eq-number">3</span><div><div class="eq-title">Prevent division by an unrealistically small spread</div>` +
+        `<div class="eq-formula">robust_std = max(scaled_MAD, f) = max(${scaledMad.toFixed(4)}, ${safeFloor.toFixed(4)}) = <span class="chosen">${robustStd.toFixed(4)}</span></div>` +
+        `<div class="eq-meaning">Inputs used: scaled MAD and noise floor <strong>f</strong>. The ${spreadSource} is larger, so it is used as the denominator.</div></div></div>` +
+        `<div class="equation-step"><span class="eq-number">4</span><div><div class="eq-title">Measure distance from historical normal</div>` +
+        `<div class="eq-formula">deviation = |y − m| = |${current.toFixed(4)} − ${value.median.toFixed(4)}| = ${deviation.toFixed(4)}</div>` +
+        `<div class="eq-meaning">Inputs used: transformed current value <strong>y</strong> and historical median <strong>m</strong>.</div></div></div>` +
+        `<div class="equation-step"><span class="eq-number">5</span><div><div class="eq-title">Standardize the deviation</div>` +
+        `<div class="eq-formula">z = deviation / robust_std = ${deviation.toFixed(4)} / ${robustStd.toFixed(4)} = ${z.toFixed(4)}</div>` +
+        `<div class="eq-meaning">The z-score says how many robust historical spreads separate the current value from the median.</div></div></div>` +
+        `<div class="equation-step"><span class="eq-number">6</span><div><div class="eq-title">Apply sensitivity to the threshold</div>` +
+        `<div class="eq-formula">effective_threshold = T / S = ${value.threshold.toFixed(4)} / ${Math.max(0.01, value.sensitivity).toFixed(4)} = ${effective.toFixed(4)}</div>` +
+        `<div class="eq-meaning">Inputs used: base threshold <strong>T</strong> and sensitivity <strong>S</strong>. Higher sensitivity lowers the required threshold.</div></div></div>` +
+        `<div class="equation-step final"><span class="eq-number">7</span><div><div class="eq-title">Final feature decision</div>` +
+        `<div class="eq-formula">z ${comparison} effective_threshold → ${z.toFixed(4)} ${comparison} ${effective.toFixed(4)}</div>` +
+        `<div class="eq-meaning"><span class="verdict ${anomaly ? "anomaly" : "normal"}">${anomaly ? "ANOMALY REASON" : "NO ANOMALY REASON"}</span> ` +
+        `${anomaly ? "This feature is added to the protocol anomaly reasons." : "This feature does not contribute a reason or score in this window."}</div></div></div></div>`;
     }
 
     calculatorInputs.forEach(id => document.getElementById(id).addEventListener("input", updateCalculator));
