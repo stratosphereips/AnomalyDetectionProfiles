@@ -35,6 +35,9 @@ class DashboardTests(unittest.TestCase):
         self.assertIn("Global anomalies", html)
         self.assertIn("Protocol-window anomalies", html)
         self.assertIn("window_seconds", dashboard.SETTING_METADATA)
+        self.assertIn("normal_dirs", dashboard.SETTING_METADATA)
+        self.assertIn("uid_corroboration_bonus", dashboard.SETTING_METADATA)
+        self.assertIn("ssh", dashboard.DETECTED_LOGS)
         self.assertIn("Target-IP anomalies", html)
         self.assertIn("SSL flow alerts", html)
         self.assertIn("Support evidence, not an anomaly", html)
@@ -191,6 +194,7 @@ class DashboardTests(unittest.TestCase):
                     "common": {
                         "training_hours": 9,
                         "window_seconds": 300,
+                        "normal_dirs": "/captures/normal",
                         "ignore_multicast_broadcast": False,
                     },
                     "multi_protocol": {"ssl_flow_threshold": 4.4},
@@ -199,6 +203,7 @@ class DashboardTests(unittest.TestCase):
             text = path.read_text(encoding="utf-8")
             self.assertIn("training_hours = 9", text)
             self.assertIn("window_seconds = 300", text)
+            self.assertIn("normal_dirs = /captures/normal", text)
             self.assertIn("ignore_multicast_broadcast = false", text)
             self.assertIn("ssl_flow_threshold = 4.4", text)
 
