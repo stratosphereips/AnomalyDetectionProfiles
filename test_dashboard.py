@@ -53,6 +53,8 @@ class DashboardTests(unittest.TestCase):
         self.assertIn("SSL flow alerts", html)
         self.assertIn("Support evidence, not an anomaly", html)
         self.assertIn("Documentation", html)
+        self.assertIn("How detection works", html)
+        self.assertIn('class="guide-link" href="/docs/"', html)
         self.assertIn("per-protocol benign warmup", html)
         self.assertIn("Responsible flows", html)
         self.assertIn("scopedFeature", html)
