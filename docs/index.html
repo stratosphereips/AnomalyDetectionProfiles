@@ -195,10 +195,10 @@
     <h1>How does the Zeek anomaly detector decide that traffic is unusual?</h1>
     <p>This page follows one record through the complete detector. It explains what is measured, how normal behavior is learned, how anomaly scores are calculated, and why a final alert is emitted.</p>
     <div class="hero-links">
-      <a href="#tour">Give me the 15-minute tour</a>
+      <a href="#tour">15-minute overview</a>
       <a href="#overview">Start with the pipeline</a>
       <a href="#features">See feature examples</a>
-      <a href="#scoring">Try the score calculator</a>
+      <a href="#scoring">Score calculator</a>
       <a href="#walkthrough">Read a full example</a>
     </div>
   </header>
@@ -223,8 +223,8 @@
 
     <main>
       <section id="tour">
-        <h2>The whole detector in 15 minutes</h2>
-        <p class="lead">Use this section as a presentation script. Its goal is to answer four questions: Where does the data come from? What numerical values are produced? What becomes an anomaly? What is updated afterward?</p>
+        <h2>The whole detector in approximately 15 minutes</h2>
+        <p class="lead">This overview answers four questions: Where does the data come from? What numerical values are produced? What becomes an anomaly? What is updated afterward?</p>
         <div class="callout good"><strong>One-sentence summary:</strong> Zeek records are correlated and grouped into time windows, each window becomes an explainable feature vector, every feature is compared with its own per-IP statistical history, threshold-crossing features become anomaly reasons, and corroborating component anomalies become a global IP anomaly before the models adapt.</div>
 
         <h3>End-to-end data flow</h3>
@@ -255,13 +255,13 @@
           <div class="feedback-loop">↺ 8. After scoring and alerting: fit trusted training, adapt normal/small windows with <code>drift_alpha</code>, or adapt strong anomalies slowly with <code>suspicious_alpha</code></div>
         </div>
 
-        <h3>A five-part speaking plan</h3>
+        <h3>Five stages of the process</h3>
         <div class="tour-grid">
-          <div class="tour-card"><div class="tour-time">Minutes 0–3</div><h3>Records and identity</h3><p>Show that Zeek produces protocol logs. Explain source/target IPs and exact UID/FUID joins. Stress that missing TLS does not stop other detection.</p></div>
-          <div class="tour-card"><div class="tour-time">Minutes 3–6</div><h3>Windows and features</h3><p>Explain that records become comparable time buckets, then numeric counts, ratios, novelty, lexical, transfer, and authentication features.</p></div>
-          <div class="tour-card"><div class="tour-time">Minutes 6–9</div><h3>Statistical comparison</h3><p>Explain per-IP/per-feature history, <code>log1p</code>, median/MAD, the noise floor, z-score, and the sensitivity-adjusted threshold.</p></div>
-          <div class="tour-card"><div class="tour-time">Minutes 9–12</div><h3>Reasons and adaptation</h3><p>Show that only crossing features become reasons. Explain Welford training, ordinary drift, and slower strong-anomaly adaptation.</p></div>
-          <div class="tour-card"><div class="tour-time">Minutes 12–15</div><h3>Outputs and evidence</h3><p>Distinguish flow, protocol, target, and global outputs. Finish with responsible records, UID corroboration, and one numeric example.</p></div>
+          <div class="tour-card"><div class="tour-time">Stage 1 · 0–3 min</div><h3>Records and identity</h3><p>Zeek produces protocol logs containing timestamps, endpoints, UID/FUID identifiers, and protocol fields. Missing TLS removes only TLS-specific detection.</p></div>
+          <div class="tour-card"><div class="tour-time">Stage 2 · 3–6 min</div><h3>Windows and features</h3><p>Records become comparable time buckets and then numeric counts, ratios, novelty, lexical, transfer, and authentication features.</p></div>
+          <div class="tour-card"><div class="tour-time">Stage 3 · 6–9 min</div><h3>Statistical comparison</h3><p>Per-IP and per-feature history supplies the <code>log1p</code>, median/MAD, noise-floor, z-score, and sensitivity-adjusted threshold calculations.</p></div>
+          <div class="tour-card"><div class="tour-time">Stage 4 · 9–12 min</div><h3>Reasons and adaptation</h3><p>Only threshold-crossing features become reasons. Welford fitting handles trusted training; EWMA handles ordinary drift and slower strong-anomaly adaptation.</p></div>
+          <div class="tour-card"><div class="tour-time">Stage 5 · 12–15 min</div><h3>Outputs and evidence</h3><p>Flow, protocol, target, and global outputs retain their scores, responsible records, UID/FUID evidence, and contribution details.</p></div>
         </div>
 
         <h3>What exactly goes into each anomaly?</h3>
@@ -275,7 +275,7 @@
           </tbody>
         </table></div>
         <div class="callout warn"><strong>What does not create the score?</strong> Features below their threshold remain visible in window data but add no anomaly reason. UI “importance” changes sorting only. Shared FUIDs are explanatory but add no bonus. Sensor-health logs are excluded. An individual TLS flow alert does not vote globally.</div>
-        <p><strong>Recommended live demonstration:</strong> show one row in Window data, open one protocol anomaly to connect its feature value → z-score → reason → responsible UID, and then open a global anomaly to show how that component's normalized contribution was combined with other evidence.</p>
+        <p>The dashboard preserves this chain for inspection: Window data contains the original feature values and z-scores; protocol and target anomalies contain threshold-crossing reasons and responsible records; global anomalies contain the normalized contribution from every component.</p>
       </section>
 
       <section id="overview">
@@ -446,8 +446,8 @@
           <div class="node yes"><strong>z ≥ threshold</strong><br>feature becomes an anomaly reason</div>
         </div>
 
-        <h3>Follow every value through the equations</h3>
-        <p>Change any white input. The blue <strong>current transformed value</strong> is calculated from the raw value. The trace below substitutes every number into the exact equation that uses it.</p>
+        <h3>Every value through the equations</h3>
+        <p>White fields are editable. The blue <strong>current transformed value</strong> is calculated from the raw value. The trace below substitutes every number into the exact equation that uses it.</p>
         <div class="table-wrap"><table>
           <thead><tr><th>Symbol</th><th>Where the value comes from</th><th>Where it is used</th></tr></thead>
           <tbody>
