@@ -238,9 +238,10 @@
       const root = $("controls"); root.innerHTML = "";
       const groups = [
         ["Core model", ["window_seconds","training_hours","sensitivity","minimum_points","threshold","threshold_quantile"]],
+        ["External baseline", ["normal_dirs"]],
         ["Input filtering", ["ignore_multicast_broadcast"]],
         ["Adaptation", ["drift_alpha","suspicious_alpha","adaptation_score"]],
-        ["Global ensemble", ["protocol_score_cap","global_threshold","minimum_protocols","corroboration_bonus","corroboration_bonus_cap"]],
+        ["Global ensemble", ["protocol_score_cap","global_threshold","minimum_protocols","corroboration_bonus","corroboration_bonus_cap","uid_corroboration_bonus","uid_corroboration_bonus_cap"]],
         ["Specialized SSL", ["ssl_hourly_threshold","ssl_flow_threshold","ssl_novelty_threshold","ssl_baseline_alpha","ssl_max_small_anomalies"]],
         ["Attribution", ["max_responsible_flows"]]
       ];
@@ -257,6 +258,8 @@
           const minimum = key === "training_hours" ? 0 : ["window_seconds","minimum_points"].includes(key) ? 1 : null;
           const field = typeof value === "boolean"
             ? `<select id="cfg-${key}" data-key="${key}"><option value="true" ${value ? "selected" : ""}>Ignore</option><option value="false" ${!value ? "selected" : ""}>Keep</option></select>`
+            : typeof value === "string"
+            ? `<input id="cfg-${key}" data-key="${key}" type="text" value="${esc(value)}" placeholder="/normal/day1, /normal/day2">`
             : `<input id="cfg-${key}" data-key="${key}" type="number" ${minimum === null ? "" : `min="${minimum}"`} step="${Number.isInteger(value) ? "1" : (key.includes("alpha") || key.includes("quantile") ? "0.001" : "0.05")}" value="${esc(value)}">`;
           control.innerHTML = `<div class="control-head"><label for="cfg-${key}">${esc(meta.label)}</label>
             ${field}</div>
@@ -274,10 +277,12 @@
     function parameterChanged(event) {
       const key = event.target.dataset.key;
       const raw = event.target.value;
-      if (raw === "" || !event.target.checkValidity()) return;
-      const current = state.config.common[key];
-      const value = typeof current === "boolean" ? raw === "true" : Number(raw);
       const section = key in state.config.common ? "common" : "multi_protocol";
+      const current = state.config[section][key];
+      if ((raw === "" && typeof current !== "string") || !event.target.checkValidity()) return;
+      const value = typeof current === "boolean"
+        ? raw === "true"
+        : typeof current === "number" ? Number(raw) : raw;
       state.config[section][key] = value;
       if (key === "window_seconds") {
         clearTimeout(state.inspectTimer);
