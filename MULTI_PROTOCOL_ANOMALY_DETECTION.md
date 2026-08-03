@@ -5,6 +5,7 @@
 ```bash
 python3 multi_protocol_anomaly_detector.py /path/to/zeek-logs \
   --config anomaly_detector.conf \
+  --normal-dir /path/to/known-normal-zeek-logs \
   --window-seconds 300 \
   --sensitivity 1.0 \
   --training-hours 3
@@ -19,7 +20,8 @@ or ensemble policy.
 All operating values are stored in
 [`anomaly_detector.conf`](anomaly_detector.conf):
 
-- `[common]` contains default sensitivity, window size, and benign training windows;
+- `[common]` contains default sensitivity, window size, benign training
+  windows, and optional comma-separated `normal_dirs`;
 - `[common]` also controls whether multicast and broadcast traffic is ignored;
 - `[output]` controls terminal presentation;
 - `[multi_protocol]` configures every protocol model, the specialized SSL
@@ -55,6 +57,13 @@ training values; configured fallback thresholds remain active. Specialized
 SSL novelty is an exception: a first-seen server or JA3S can create an
 immediate SSL-flow alert, but that alert does not vote in the global ensemble.
 
+`normal_dirs` provides a separate known-normal baseline. The detector fits all
+supported windows in those folders before analyzing the selected folder and
+then calibrates thresholds over the fitted observations. Baseline input is
+silent and excluded from analyzed-run statistics. Models remain keyed by IP
+and protocol: a selected-capture IP/protocol pair absent from the external
+baseline still follows `training_hours` and `minimum_points` normally.
+
 For the complete equations and exact meanings of `value`, `mean`, `zscore`,
 protocol score, normalized contribution, global score, confidence, and EWMA
 adaptation, see the
@@ -66,8 +75,13 @@ The detector processes every IP-attributable network log present in the Zeek
 folder:
 
 `analyzer`, `conn`, `dce_rpc`, `dhcp`, `dns`, `files`, `http`, `known_hosts`,
-`known_services`, `notice`, `ntlm`, `smb_mapping`, `software`, `ssl`, and
-`weird`.
+`known_services`, `notice`, `ntlm`, `smb_mapping`, `software`, `ssh`, `ssl`,
+and `weird`.
+
+No individual protocol is mandatory. Missing `ssl.log` only removes TLS
+features and TLS flow alerts; it does not prevent connection, DNS, SSH, HTTP,
+file, target-IP, or global detection. Cross-log enrichment is applied only
+when linked records exist.
 
 The following logs are intentionally excluded from per-IP detection:
 
@@ -103,6 +117,19 @@ states, ports, duration and bytes; file MIME types, hashes, missing bytes and
 sizes; TLS server names, versions, ciphers and fingerprints; NTLM identities
 and failures; and SMB shares.
 
+Connection windows also measure destination-port fan-out, failed and scan-like
+history ratios, short and zero-payload ratios, missing services, packet totals,
+and transfer rates. DNS windows derive first-label length, Shannon entropy,
+character composition, DGA-like and repeated-pattern counts, answer/rejection
+ratios, and TLD diversity. Multicast DNS, `.local`, reverse lookups, and DNS
+service discovery are excluded from the DGA-like count while remaining visible
+to ordinary DNS features.
+
+HTTP windows measure URI length and diversity. Exact FUID links to `files.log`
+add linked-file counts, bytes, and MIME-type diversity; file windows also model
+the observed-versus-declared byte gap. SSH windows model client/server identity,
+authentication outcome, and maximum authentication attempts.
+
 SSL uses the specialized names `ssl_flows`, `unique_servers`, `new_servers`,
 `ja3_changes` and `known_server_avg_bytes`, plus TLS
 version, cipher, JA3, JA3S, validation-status diversity, and failure ratio.
@@ -128,12 +155,19 @@ gets at most one vote:
 
 ```text
 protocol contribution = min(protocol anomaly score, 10) / 10
-global score = min(1, sum(contributions) + corroboration bonus)
+global score = min(1, sum(contributions) + protocol bonus + exact-UID bonus)
 ```
 
 The corroboration bonus is `0.15` for every additional anomalous protocol,
 capped at `0.30`. A global anomaly is emitted when its score reaches `0.65` or
 at least two independent protocols agree.
+
+After feature-aware flow attribution, each exact UID responsible in at least
+two anomalous components adds `uid_corroboration_bonus` (default `0.10`),
+capped by `uid_corroboration_bonus_cap` (default `0.20`). Global output exposes
+`shared_uids`, the applied bonus, and informational `shared_fuids`. FUIDs do
+not add score because one file identifier legitimately spans HTTP and file
+records by design.
 
 Per-protocol score capping is important: high-volume DNS or connection logs
 cannot drown out a lower-volume but independent NTLM, SMB, HTTP, or notice
