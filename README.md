@@ -28,8 +28,12 @@ threshold excess, protocol breadth, and reason count. Flow and protocol-window
 views default to total score descending; global anomalies default to composite
 importance because global scores commonly saturate at `1.0`.
 
-Each dashboard execution uses a private configuration snapshot under
-`.dashboard_runs/`; it does not modify `anomaly_detector.conf`.
+The application directory may be read-only. Runtime configuration snapshots,
+detector output, and dashboard-saved settings are stored by default under
+`/tmp/anomaly-detection-profiles-dashboard-<uid>/`; the packaged
+`anomaly_detector.conf` is never modified. Set
+`ANOMALY_DASHBOARD_STATE_DIR=/writable/path` before starting the dashboard to
+choose a persistent writable location.
 
 # Direct detection run without dashboard
 `multi_protocol_anomaly_detector.py` is the only detector program. It analyzes
