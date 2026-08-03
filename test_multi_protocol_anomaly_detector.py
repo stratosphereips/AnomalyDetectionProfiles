@@ -8,9 +8,12 @@ from multi_protocol_anomaly_detector import (
     MultiProtocolDetector,
     Outputs,
     bucket_start,
+    dns_lexical_metrics,
     discover_logs,
+    enrich_cross_log_context,
     importance_metrics,
     is_ignored_multicast_broadcast,
+    main,
     source_ip,
 )
 
@@ -32,6 +35,8 @@ def arguments():
         minimum_protocols=2,
         corroboration_bonus=0.15,
         corroboration_bonus_cap=0.30,
+        uid_corroboration_bonus=0.10,
+        uid_corroboration_bonus_cap=0.20,
         max_responsible_flows=10,
         ssl_hourly_threshold=3.5,
         ssl_flow_threshold=100.0,
@@ -115,6 +120,109 @@ class MultiProtocolTests(unittest.TestCase):
             self.assertEqual(selected, [("dns", root / "dns.log")])
             self.assertEqual(skipped, ["stats"])
 
+    def test_discovery_includes_ssh(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            (root / "ssh.log").touch()
+            selected, skipped = discover_logs(root)
+            self.assertEqual(selected, [("ssh", root / "ssh.log")])
+            self.assertEqual(skipped, [])
+
+    def test_dns_lexical_metrics_and_local_exclusion(self):
+        suspicious = dns_lexical_metrics("x9q7mz2k4v8p.example")
+        local = dns_lexical_metrics("_printer._tcp.local")
+        self.assertTrue(suspicious["dga_like"])
+        self.assertTrue(local["is_local_tld"])
+        self.assertTrue(local["is_service_discovery"])
+
+    def test_uid_and_fuid_cross_log_enrichment(self):
+        http = {
+            "uid": "C1",
+            "resp_fuids": "F1",
+        }
+        observations = [
+            (1.0, "http", http, "10.0.0.1", "1.1.1.1"),
+            (
+                1.1,
+                "files",
+                {
+                    "uid": "C1",
+                    "fuid": "F1",
+                    "total_bytes": "120",
+                    "seen_bytes": "100",
+                    "mime_type": "application/pdf",
+                },
+                "10.0.0.1",
+                "1.1.1.1",
+            ),
+            (1.2, "weird", {"uid": "C1"}, "10.0.0.1", "1.1.1.1"),
+        ]
+        enrich_cross_log_context(observations)
+        self.assertEqual(http["_uid_protocols"], ["files", "http", "weird"])
+        self.assertEqual(http["_linked_fuids"], ["F1"])
+        self.assertEqual(http["_linked_file_bytes"], 120.0)
+        self.assertEqual(http["_linked_file_mimes"], ["application/pdf"])
+
+    def test_external_normal_directory_is_prefit_and_not_counted(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            normal = root / "normal"
+            selected = root / "selected"
+            output = root / "output"
+            normal.mkdir()
+            selected.mkdir()
+            base = {
+                "uid": "C1",
+                "id.orig_h": "10.0.0.1",
+                "id.resp_h": "1.1.1.1",
+                "id.resp_p": 80,
+                "conn_state": "SF",
+                "orig_bytes": 10,
+                "resp_bytes": 20,
+            }
+            (normal / "conn.log").write_text(
+                json.dumps({"ts": 1, **base}) + "\n", encoding="utf-8"
+            )
+            (selected / "conn.log").write_text(
+                json.dumps({"ts": 3601, **base, "uid": "C2"}) + "\n",
+                encoding="utf-8",
+            )
+            self.assertEqual(
+                main(
+                    [
+                        str(selected),
+                        "--normal-dir",
+                        str(normal),
+                        "--training-hours",
+                        "0",
+                        "--minimum-points",
+                        "1",
+                        "--quiet",
+                        "--no-terminal-data",
+                        "-o",
+                        str(output),
+                    ]
+                ),
+                0,
+            )
+            events = [
+                json.loads(line)
+                for line in (output / "multi_protocol_detector.log.jsonl")
+                .read_text()
+                .splitlines()
+            ]
+            baseline = next(
+                event
+                for event in events
+                if event["event"] == "external_baseline_loaded"
+            )
+            stop = next(
+                event for event in events if event["event"] == "detector_stop"
+            )
+            self.assertEqual(baseline["records"], 1)
+            self.assertEqual(stop["records_processed"], 1)
+            self.assertEqual(stop["external_baseline_records"], 1)
+
     def test_multicast_and_broadcast_filter_matches_ipv4_and_ipv6(self):
         self.assertTrue(
             is_ignored_multicast_broadcast("10.0.0.1", "224.0.0.1")
@@ -163,6 +271,80 @@ class MultiProtocolTests(unittest.TestCase):
             self.assertEqual(len(events), 1)
             self.assertEqual(events[0]["protocols"], ["dns", "http"])
             self.assertEqual(events[0]["global_score"], 0.75)
+
+    def test_exact_uid_adds_capped_global_corroboration(self):
+        with tempfile.TemporaryDirectory() as temp:
+            output = Outputs(Path(temp), quiet=True)
+            detector = MultiProtocolDetector(arguments(), output)
+            detector.protocol_anomalies = [
+                {
+                    "event": "protocol_anomaly",
+                    "host": "10.0.0.1",
+                    "hour_start": 0,
+                    "protocol": protocol,
+                    "normalized_score": 0.2,
+                    "score": 2.0,
+                    "reasons": [{"feature": "flow_count"}],
+                    "responsible_flow_count": 1,
+                    "responsible_flows": [],
+                    "responsible_uids": ["C1"],
+                    "responsible_fuids": [],
+                }
+                for protocol in ("dns", "http")
+            ]
+            event = detector.ensemble()[0]
+            output.close()
+            self.assertEqual(event["shared_uids"], ["C1"])
+            self.assertEqual(event["uid_corroboration_bonus"], 0.1)
+            self.assertEqual(event["global_score"], 0.65)
+
+    def test_connection_and_ssh_derived_features(self):
+        with tempfile.TemporaryDirectory() as temp:
+            output = Outputs(Path(temp), quiet=True)
+            detector = MultiProtocolDetector(arguments(), output)
+            for port in ("22", "23"):
+                detector.observe(
+                    "conn",
+                    {
+                        "uid": f"C{port}",
+                        "id.orig_h": "10.0.0.1",
+                        "id.resp_h": "1.1.1.1",
+                        "id.resp_p": port,
+                        "conn_state": "S0",
+                        "history": "S",
+                        "duration": "0.01",
+                        "orig_bytes": "0",
+                        "resp_bytes": "0",
+                        "orig_pkts": "1",
+                    },
+                    "10.0.0.1",
+                    1.0,
+                )
+            detector.observe(
+                "ssh",
+                {
+                    "uid": "S1",
+                    "id.orig_h": "10.0.0.1",
+                    "id.resp_h": "1.1.1.1",
+                    "auth_success": "F",
+                    "auth_attempts": "7",
+                },
+                "10.0.0.1",
+                1.0,
+            )
+            detector.finalize_all()
+            output.close()
+            rows = [
+                json.loads(line)
+                for line in (Path(temp) / "protocol_hourly_data.jsonl")
+                .read_text()
+                .splitlines()
+            ]
+            conn = next(row for row in rows if row["protocol"] == "conn")
+            ssh = next(row for row in rows if row["protocol"] == "ssh")
+            self.assertEqual(conn["features"]["max_ports_per_destination"], 2)
+            self.assertEqual(conn["features"]["failed_scan_ratio"], 1)
+            self.assertEqual(ssh["features"]["max_auth_attempts"], 7)
 
     def test_target_anomalies_contribute_to_global_ensemble(self):
         with tempfile.TemporaryDirectory() as temp:
