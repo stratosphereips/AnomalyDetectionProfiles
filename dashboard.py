@@ -239,8 +239,10 @@ def markdown_to_html(text: str) -> str:
         stripped = line.strip()
         if in_code:
             if stripped.startswith("```"):
+                escaped_code = escape_html("\n".join(code_lines))
                 blocks.append(
-                    f'<pre><code class="language-{escape_html(code_lang)}">{escape_html("\\n".join(code_lines))}</code></pre>'
+                    f'<pre><code class="language-{escape_html(code_lang)}">'
+                    f"{escaped_code}</code></pre>"
                 )
                 in_code = False
                 code_lang = ""
@@ -327,8 +329,10 @@ def markdown_to_html(text: str) -> str:
         flush_table()
     close_lists()
     if in_code:
+        escaped_code = escape_html("\n".join(code_lines))
         blocks.append(
-            f'<pre><code class="language-{escape_html(code_lang)}">{escape_html("\\n".join(code_lines))}</code></pre>'
+            f'<pre><code class="language-{escape_html(code_lang)}">'
+            f"{escaped_code}</code></pre>"
         )
     return "".join(blocks)
 
