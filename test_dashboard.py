@@ -84,6 +84,10 @@ class DashboardTests(unittest.TestCase):
         self.assertIn("Where the value comes from", guide)
         self.assertIn("deviation = |y − m|", guide)
         self.assertIn("effective_threshold = T / S", guide)
+        self.assertIn("online statistical model", guide)
+        self.assertIn("Exact adaptation conditions", guide)
+        self.assertIn("Detection and adaptation are two separate decisions", guide)
+        self.assertIn("suspicious_alpha", guide)
         source = Path(dashboard.__file__).read_text(encoding="utf-8")
         self.assertIn('"/docs/"', source)
 
