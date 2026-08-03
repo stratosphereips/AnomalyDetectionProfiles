@@ -42,6 +42,7 @@ anomalies.
 ```bash
 python3 multi_protocol_anomaly_detector.py /path/to/zeek-logs \
   --config anomaly_detector.conf \
+  --normal-dir /path/to/known-normal-zeek-logs \
   --window-seconds 300 \
   --sensitivity 1.0 \
   --training-hours 3
@@ -50,6 +51,12 @@ python3 multi_protocol_anomaly_detector.py /path/to/zeek-logs \
 The input must be a directory containing at least one supported Zeek protocol
 log. TLS is optional; when both `ssl.log` and `conn.log` are available, the
 detector automatically correlates them by UID.
+
+Every supported log is optional except that at least one supported log must be
+present. A folder with `conn.log`, `dns.log`, or `ssh.log` but no `ssl.log`
+still runs normally; only TLS-specific features are absent. Supported inputs
+include `conn`, `dns`, `http`, `files`, `ssh`, `ssl`, DHCP, NTLM, SMB, notice,
+weird, and the other IP-attributable logs documented below.
 
 ## Training and zero-training mode
 
@@ -85,6 +92,14 @@ IP/protocol model, with the fourth active window first eligible for scoring.
 Sparse models may have fewer observations because empty windows are not
 invented.
 
+For a trusted baseline that is separate from the analyzed capture, set
+`normal_dirs` to comma-separated Zeek folders in the configuration/dashboard,
+or repeat `--normal-dir`. Their windows are fitted first, produce no alerts,
+and do not enter analyzed-run counts. External baseline traffic must use the
+same window size and should contain the same source or target IP identities as
+the traffic being compared; an unseen IP/protocol model still follows the
+ordinary training or cold-start behavior.
+
 
 
 ## Detection levels
@@ -98,6 +113,11 @@ invented.
 SSL is not a separate detector. It uses specialized flow features and
 specialized window features inside the same protocol-window pipeline and global
 ensemble as DNS, HTTP, connections, files, DHCP, NTLM, SMB, and other logs.
+Connection windows additionally model scan shape and transfer rates; DNS
+windows model lexical/DGA-like behavior while excluding common local and
+service-discovery traffic; SSH models client/server identity, authentication
+success, and attempts; and HTTP records are enriched with exact FUID-linked
+file metadata when `files.log` is available.
 
 ## Output
 
@@ -113,6 +133,10 @@ The configured output directory contains:
 Every anomaly includes `responsible_flow_count` and `responsible_flows` with
 the source log, timestamp, UID/FUID, endpoints, relevant fields, and matched
 reasons. `max_responsible_flows` controls representative-flow truncation.
+Anomaly objects also expose `responsible_uids` and `responsible_fuids`. When
+the same responsible UID occurs in multiple anomalous components in one
+window, the global event records `shared_uids` and applies the configurable,
+capped exact-UID corroboration bonus.
 
 Terminal output uses blue for data, red for flow/protocol anomalies, magenta
 for global anomalies, and yellow for reasons. Use `--no-terminal-data`,
