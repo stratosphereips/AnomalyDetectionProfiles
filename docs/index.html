@@ -102,6 +102,27 @@
     .step h3 { margin: 0.7rem 0 0.35rem; }
     .step p { margin: 0; color: var(--muted); font-size: 0.9rem; }
 
+    .flow-diagram { margin: 1.4rem 0; padding: 1.2rem; border: 1px solid #cbd7ea; border-radius: var(--radius); background: linear-gradient(150deg, #fff, #f2f6fd); box-shadow: var(--shadow); }
+    .flow-row { display: flex; align-items: stretch; justify-content: center; gap: 0.55rem; }
+    .flow-node { flex: 1 1 0; min-width: 0; padding: 0.85rem; border: 2px solid #aac5ef; border-radius: 10px; background: white; text-align: center; }
+    .flow-node strong { display: block; margin-bottom: 0.25rem; }
+    .flow-node small { display: block; color: var(--muted); line-height: 1.4; }
+    .flow-node.input { border-color: var(--blue); background: var(--blue-soft); }
+    .flow-node.model { border-color: var(--violet); background: var(--violet-soft); }
+    .flow-node.gate { border-color: var(--amber); background: var(--amber-soft); }
+    .flow-node.alert { border-color: var(--red); background: var(--red-soft); }
+    .flow-node.global { border-color: var(--green); background: var(--green-soft); }
+    .flow-arrow { align-self: center; color: var(--blue); font-size: 1.5rem; font-weight: 900; }
+    .flow-down { margin: 0.25rem 0; color: var(--blue); text-align: center; font-size: 1.5rem; font-weight: 900; }
+    .flow-down.caption { font-size: 0.78rem; letter-spacing: 0.02em; }
+    .output-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0.7rem; }
+    .feedback-loop { margin-top: 0.7rem; padding: 0.65rem 0.85rem; border: 1px dashed var(--violet); border-radius: 8px; color: #493494; background: var(--violet-soft); text-align: center; font-weight: 700; }
+    .tour-grid { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 0.7rem; margin: 1rem 0; }
+    .tour-card { padding: 0.9rem; border: 1px solid var(--line); border-top: 4px solid var(--blue); border-radius: 10px; background: white; box-shadow: var(--shadow); }
+    .tour-time { color: var(--blue); font-size: 0.76rem; font-weight: 850; text-transform: uppercase; letter-spacing: 0.06em; }
+    .tour-card h3 { margin: 0.4rem 0; font-size: 1rem; }
+    .tour-card p { color: var(--muted); font-size: 0.84rem; }
+
     .grid-2, .grid-3 { display: grid; gap: 1rem; }
     .grid-2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
     .grid-3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
@@ -154,6 +175,7 @@
       .pipeline { grid-template-columns: repeat(2, 1fr); }
       .step:nth-child(2)::after { display: none; }
       .calc-grid { grid-template-columns: repeat(2, 1fr); }
+      .tour-grid { grid-template-columns: repeat(2, 1fr); }
     }
     @media (max-width: 640px) {
       .hero { padding-top: 3rem; }
@@ -161,6 +183,9 @@
       .pipeline, .grid-2, .grid-3, .example-flow, .decision { grid-template-columns: 1fr; }
       .step::after, .decision .arrow { display: none; }
       .calc-grid { grid-template-columns: 1fr; }
+      .tour-grid, .output-grid { grid-template-columns: 1fr; }
+      .flow-row { flex-direction: column; }
+      .flow-arrow { transform: rotate(90deg); text-align: center; }
     }
   </style>
 </head>
@@ -170,6 +195,7 @@
     <h1>How does the Zeek anomaly detector decide that traffic is unusual?</h1>
     <p>This page follows one record through the complete detector. It explains what is measured, how normal behavior is learned, how anomaly scores are calculated, and why a final alert is emitted.</p>
     <div class="hero-links">
+      <a href="#tour">Give me the 15-minute tour</a>
       <a href="#overview">Start with the pipeline</a>
       <a href="#features">See feature examples</a>
       <a href="#scoring">Try the score calculator</a>
@@ -180,6 +206,7 @@
   <div class="layout">
     <nav aria-label="Page contents">
       <strong>On this page</strong>
+      <a href="#tour">15-minute summary</a>
       <a href="#overview">1. Complete pipeline</a>
       <a href="#input">2. Input and correlation</a>
       <a href="#windows">3. Time windows</a>
@@ -195,6 +222,62 @@
     </nav>
 
     <main>
+      <section id="tour">
+        <h2>The whole detector in 15 minutes</h2>
+        <p class="lead">Use this section as a presentation script. Its goal is to answer four questions: Where does the data come from? What numerical values are produced? What becomes an anomaly? What is updated afterward?</p>
+        <div class="callout good"><strong>One-sentence summary:</strong> Zeek records are correlated and grouped into time windows, each window becomes an explainable feature vector, every feature is compared with its own per-IP statistical history, threshold-crossing features become anomaly reasons, and corroborating component anomalies become a global IP anomaly before the models adapt.</div>
+
+        <h3>End-to-end data flow</h3>
+        <div class="flow-diagram" role="group" aria-label="Data flow from Zeek logs through anomaly detection and model adaptation">
+          <div class="flow-row">
+            <div class="flow-node input"><strong>1. Zeek logs</strong><small><code>conn.log</code>, <code>dns.log</code>, HTTP, files, SSH, SSL…<br>Raw records with timestamp, IPs, UID/FUID, and protocol fields</small></div>
+            <span class="flow-arrow" aria-hidden="true">→</span>
+            <div class="flow-node"><strong>2. Normalize + correlate</strong><small>Parse TSV/JSON, identify source/target IP, join exact UID/FUID context</small></div>
+            <span class="flow-arrow" aria-hidden="true">→</span>
+            <div class="flow-node"><strong>3. Time buckets</strong><small><code>(source IP, protocol, window)</code><br>and independent <code>(target IP, window)</code> buckets</small></div>
+          </div>
+          <div class="flow-down" aria-hidden="true">↓</div>
+          <div class="flow-row">
+            <div class="flow-node"><strong>4. Feature vectors</strong><small>Counts, ratios, novelty, ports, bytes, entropy, URI/file/SSH/TLS values<br><code>{flow_count: 50, dga_ratio: 0.3, …}</code></small></div>
+            <span class="flow-arrow" aria-hidden="true">→</span>
+            <div class="flow-node model"><strong>5. Per-feature statistical models</strong><small><code>log1p</code> transform → mean/variance or median/MAD → noise floor → z-score</small></div>
+            <span class="flow-arrow" aria-hidden="true">→</span>
+            <div class="flow-node gate"><strong>6. Reason gate</strong><small>If <code>z ≥ threshold / sensitivity</code>, that feature becomes one anomaly reason</small></div>
+          </div>
+          <div class="flow-down" aria-hidden="true">↓</div>
+          <div class="output-grid">
+            <div class="flow-node alert"><strong>Protocol-window anomaly</strong><small>Sum of anomalous feature z-scores, reasons, responsible records and IDs</small></div>
+            <div class="flow-node alert"><strong>Target-window anomaly</strong><small>Incoming count/source/port/protocol deviations for one destination</small></div>
+            <div class="flow-node gate"><strong>TLS flow alert</strong><small>Individual new server/JA3S or known-server byte evidence; supporting evidence only</small></div>
+          </div>
+          <div class="flow-down caption">↓ Protocol and target anomalies vote; TLS flow alerts do not vote ↓</div>
+          <div class="flow-node global"><strong>7. Global IP ensemble</strong><small>Capped component contributions + multi-component bonus + exact responsible-UID bonus → global anomaly</small></div>
+          <div class="feedback-loop">↺ 8. After scoring and alerting: fit trusted training, adapt normal/small windows with <code>drift_alpha</code>, or adapt strong anomalies slowly with <code>suspicious_alpha</code></div>
+        </div>
+
+        <h3>A five-part speaking plan</h3>
+        <div class="tour-grid">
+          <div class="tour-card"><div class="tour-time">Minutes 0–3</div><h3>Records and identity</h3><p>Show that Zeek produces protocol logs. Explain source/target IPs and exact UID/FUID joins. Stress that missing TLS does not stop other detection.</p></div>
+          <div class="tour-card"><div class="tour-time">Minutes 3–6</div><h3>Windows and features</h3><p>Explain that records become comparable time buckets, then numeric counts, ratios, novelty, lexical, transfer, and authentication features.</p></div>
+          <div class="tour-card"><div class="tour-time">Minutes 6–9</div><h3>Statistical comparison</h3><p>Explain per-IP/per-feature history, <code>log1p</code>, median/MAD, the noise floor, z-score, and the sensitivity-adjusted threshold.</p></div>
+          <div class="tour-card"><div class="tour-time">Minutes 9–12</div><h3>Reasons and adaptation</h3><p>Show that only crossing features become reasons. Explain Welford training, ordinary drift, and slower strong-anomaly adaptation.</p></div>
+          <div class="tour-card"><div class="tour-time">Minutes 12–15</div><h3>Outputs and evidence</h3><p>Distinguish flow, protocol, target, and global outputs. Finish with responsible records, UID corroboration, and one numeric example.</p></div>
+        </div>
+
+        <h3>What exactly goes into each anomaly?</h3>
+        <div class="table-wrap"><table>
+          <thead><tr><th>Output</th><th>What can create it</th><th>Score</th><th>Does it enter the global ensemble?</th></tr></thead>
+          <tbody>
+            <tr><td><code>ssl-flow</code></td><td>One TLS flow with a new server, new JA3S, or statistically unusual bytes to a known server.</td><td>Flow reason evidence plus confidence metadata.</td><td><strong>No.</strong> It is supporting evidence.</td></tr>
+            <tr><td><code>protocol_anomaly</code></td><td>At least one source-IP/protocol window feature crosses its effective threshold.</td><td>Sum of the z-scores of crossing feature reasons.</td><td><strong>Yes.</strong> One capped vote per protocol component.</td></tr>
+            <tr><td><code>target_anomaly</code></td><td>At least one target-IP feature—such as incoming flows, sources, ports, protocols, or failure ratio—crosses its threshold.</td><td>Sum of its crossing feature z-scores.</td><td><strong>Yes.</strong> It is an independent target component.</td></tr>
+            <tr><td><code>global_anomaly</code></td><td>Protocol/target contributions reach the effective global score threshold, or enough independent components agree.</td><td>Capped component contributions + corroboration bonus + exact shared-UID bonus, bounded to 1.</td><td>It is the final combined output.</td></tr>
+          </tbody>
+        </table></div>
+        <div class="callout warn"><strong>What does not create the score?</strong> Features below their threshold remain visible in window data but add no anomaly reason. UI “importance” changes sorting only. Shared FUIDs are explanatory but add no bonus. Sensor-health logs are excluded. An individual TLS flow alert does not vote globally.</div>
+        <p><strong>Recommended live demonstration:</strong> show one row in Window data, open one protocol anomaly to connect its feature value → z-score → reason → responsible UID, and then open a global anomaly to show how that component's normalized contribution was combined with other evidence.</p>
+      </section>
+
       <section id="overview">
         <h2>1. The complete pipeline</h2>
         <p class="lead">The detector does not ask whether one packet matches a malicious signature. It asks whether the current behavior of an IP is sufficiently different from that IP's learned history.</p>
