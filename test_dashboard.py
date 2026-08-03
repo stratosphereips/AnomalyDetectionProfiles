@@ -88,6 +88,9 @@ class DashboardTests(unittest.TestCase):
         self.assertIn("Exact adaptation conditions", guide)
         self.assertIn("Detection and adaptation are two separate decisions", guide)
         self.assertIn("suspicious_alpha", guide)
+        self.assertIn("What exactly is the adaptive minimum noise floor?", guide)
+        self.assertIn("candidate_floor = max(0.01, q10", guide)
+        self.assertIn("new_floor = 0.95 × old_floor", guide)
         source = Path(dashboard.__file__).read_text(encoding="utf-8")
         self.assertIn('"/docs/"', source)
 
