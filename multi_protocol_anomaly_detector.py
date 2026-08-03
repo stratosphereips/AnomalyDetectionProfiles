@@ -8,7 +8,7 @@ import ipaddress
 import json
 import math
 import sys
-from collections import defaultdict
+from collections import Counter, defaultdict
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Optional
@@ -30,6 +30,7 @@ DEFAULT_CONFIG = Path(__file__).with_name("anomaly_detector.conf")
 MULTI_DEFAULTS = {
     "training_hours": 3,
     "window_seconds": 3600,
+    "normal_dirs": "",
     "sensitivity": 1.0,
     "ignore_multicast_broadcast": True,
     "color": "auto",
@@ -47,6 +48,8 @@ MULTI_DEFAULTS = {
     "minimum_protocols": 2,
     "corroboration_bonus": 0.15,
     "corroboration_bonus_cap": 0.30,
+    "uid_corroboration_bonus": 0.10,
+    "uid_corroboration_bonus_cap": 0.20,
     "max_responsible_flows": 10,
     "ssl_hourly_threshold": 3.5,
     "ssl_flow_threshold": 3.5,
@@ -70,7 +73,11 @@ PROTOCOL_FIELDS: dict[str, dict[str, Any]] = {
     },
     "http": {
         "categorical": ("host", "method", "status_code", "user_agent"),
-        "numeric": ("request_body_len", "response_body_len"),
+        "numeric": (
+            "request_body_len",
+            "response_body_len",
+            "trans_depth",
+        ),
         "failure": lambda r: number(r.get("status_code")) >= 400,
     },
     "ssl": {
@@ -87,7 +94,14 @@ PROTOCOL_FIELDS: dict[str, dict[str, Any]] = {
     },
     "files": {
         "categorical": ("source", "mime_type", "filename", "sha256"),
-        "numeric": ("seen_bytes", "total_bytes", "missing_bytes", "duration"),
+        "numeric": (
+            "seen_bytes",
+            "total_bytes",
+            "missing_bytes",
+            "overflow_bytes",
+            "duration",
+            "depth",
+        ),
         "failure": lambda r: clean(r.get("timedout")).upper() == "T"
         or number(r.get("missing_bytes")) > 0,
     },
@@ -127,6 +141,11 @@ PROTOCOL_FIELDS: dict[str, dict[str, Any]] = {
         "categorical": ("username", "hostname", "domainname"),
         "numeric": (),
         "failure": lambda r: clean(r.get("success")).upper() == "F",
+    },
+    "ssh": {
+        "categorical": ("client", "server", "auth_success", "direction"),
+        "numeric": ("auth_attempts",),
+        "failure": lambda r: clean(r.get("auth_success")).upper() == "F",
     },
     "weird": {
         "categorical": ("name", "addl"),
@@ -228,6 +247,95 @@ def bucket_start(timestamp: float, window_seconds: int) -> int:
     return value - value % window_seconds
 
 
+def zeek_values(value: Any) -> list[str]:
+    if isinstance(value, (list, tuple, set)):
+        return [clean(item) for item in value if clean(item)]
+    normalized = clean(value)
+    if not normalized:
+        return []
+    return [item for item in normalized.split(",") if item and item != "-"]
+
+
+def zeek_bool(value: Any) -> bool:
+    return clean(value).upper() in {"1", "T", "TRUE", "YES"}
+
+
+def text_entropy(value: str) -> float:
+    if not value:
+        return 0.0
+    counts = Counter(value)
+    length = len(value)
+    return -sum(
+        (count / length) * math.log2(count / length)
+        for count in counts.values()
+    )
+
+
+def dns_lexical_metrics(value: Any) -> dict[str, Any]:
+    query = clean(value).lower().rstrip(".")
+    labels = query.split(".") if query else []
+    first_label = labels[0] if labels else ""
+    tld = labels[-1] if labels else ""
+    alpha = [character for character in first_label if character.isalpha()]
+    digits = sum(character.isdigit() for character in first_label)
+    vowels = sum(character in "aeiou" for character in alpha)
+    label_length = len(first_label)
+    entropy = text_entropy(first_label)
+    unique_ratio = len(set(first_label)) / max(1, label_length)
+    vowel_ratio = vowels / max(1, len(alpha))
+    digit_ratio = digits / max(1, label_length)
+    dga_like = bool(
+        label_length >= 8
+        and entropy >= 2.8
+        and unique_ratio >= 0.55
+        and (vowel_ratio <= 0.45 or digit_ratio >= 0.10)
+    )
+    reverse = query.endswith(".in-addr.arpa") or query.endswith(".ip6.arpa")
+    service_discovery = (
+        query.startswith("_")
+        or "._tcp.local" in query
+        or "._udp.local" in query
+    )
+    return {
+        "query": query,
+        "tld": tld,
+        "query_length": len(query),
+        "label_count": len(labels),
+        "first_label_length": label_length,
+        "query_entropy": entropy,
+        "unique_character_ratio": unique_ratio,
+        "vowel_ratio": vowel_ratio,
+        "digit_ratio": digit_ratio,
+        "dga_like": dga_like,
+        "is_local_tld": tld == "local",
+        "is_reverse_lookup": reverse,
+        "is_service_discovery": service_discovery,
+        "pattern": f"{tld}:{label_length // 4}:{round(entropy * 2)}",
+    }
+
+
+def parse_normal_dirs(value: Any) -> list[Path]:
+    if isinstance(value, (list, tuple)):
+        items = [clean(item) for item in value]
+    else:
+        items = clean(value).replace("\n", ",").split(",")
+    return [Path(item.strip()).expanduser() for item in items if item.strip()]
+
+
+def flow_identifier_fields(flows: list[dict[str, Any]]) -> dict[str, list[str]]:
+    uids = {clean(flow.get("uid")) for flow in flows if clean(flow.get("uid"))}
+    fuids: set[str] = set()
+    for flow in flows:
+        fuid = clean(flow.get("fuid"))
+        if fuid:
+            fuids.add(fuid)
+        fuids.update(zeek_values(flow.get("details", {}).get("linked_fuids")))
+    return {
+        "responsible_uids": sorted(uids),
+        "responsible_fuids": sorted(fuids),
+    }
+
+
 def importance_metrics(
     reasons: list[dict[str, Any]],
     total_score: float,
@@ -297,6 +405,24 @@ class ProtocolBucket:
         default_factory=lambda: defaultdict(float)
     )
     numeric_counts: dict[str, int] = field(
+        default_factory=lambda: defaultdict(int)
+    )
+    derived_sums: dict[str, float] = field(
+        default_factory=lambda: defaultdict(float)
+    )
+    derived_maxes: dict[str, float] = field(
+        default_factory=lambda: defaultdict(float)
+    )
+    derived_sets: dict[str, set[str]] = field(
+        default_factory=lambda: defaultdict(set)
+    )
+    derived_counts: dict[str, int] = field(
+        default_factory=lambda: defaultdict(int)
+    )
+    destination_ports: dict[str, set[str]] = field(
+        default_factory=lambda: defaultdict(set)
+    )
+    dns_patterns: dict[str, int] = field(
         default_factory=lambda: defaultdict(int)
     )
     failures: int = 0
@@ -454,6 +580,164 @@ class MultiProtocolDetector:
         self.records_by_protocol: dict[str, int] = defaultdict(int)
         self.skipped_no_ip: dict[str, int] = defaultdict(int)
         self.ssl_conn_matches = 0
+        self.force_training = False
+        self.suppress_output = False
+
+    def observe_derived_features(
+        self,
+        protocol: str,
+        record: dict[str, Any],
+        peer: str,
+        bucket: ProtocolBucket,
+    ) -> tuple[dict[str, Any], dict[str, bool]]:
+        details: dict[str, Any] = {}
+        flags: dict[str, bool] = {}
+        if protocol == "conn":
+            port = clean(record.get("id.resp_p"))
+            if peer and port:
+                bucket.destination_ports[peer].add(port)
+            state = clean(record.get("conn_state"))
+            history = clean(record.get("history"))
+            duration_present = bool(clean(record.get("duration")))
+            duration = number(record.get("duration"))
+            total_bytes = number(record.get("orig_bytes")) + number(
+                record.get("resp_bytes")
+            )
+            total_packets = number(record.get("orig_pkts")) + number(
+                record.get("resp_pkts")
+            )
+            derived = {
+                "failed_scan": state
+                in {"S0", "REJ", "RSTO", "RSTOS0", "RSTR", "RSTRH", "SH", "SHR"},
+                "scan_history": history in {"S", "Sr", "Ar", "A", "R", "Sh", "ShR"},
+                "short_connection": duration_present and duration <= 0.05,
+                "zero_payload": total_bytes <= 0,
+                "missing_service": not clean(record.get("service")),
+                "established_session": state in {"SF", "S1"},
+            }
+            for name, matched in derived.items():
+                if matched:
+                    bucket.derived_counts[name] += 1
+                flags[name] = matched
+            bytes_per_second = total_bytes / duration if duration > 0 else 0.0
+            bytes_per_packet = total_bytes / max(total_packets, 1.0)
+            bucket.derived_sums["total_packets"] += total_packets
+            bucket.derived_sums["bytes_per_second"] += bytes_per_second
+            bucket.derived_sums["bytes_per_packet"] += bytes_per_packet
+            bucket.derived_maxes["bytes_per_second"] = max(
+                bucket.derived_maxes["bytes_per_second"], bytes_per_second
+            )
+            details.update(
+                {
+                    "history": history,
+                    "total_packets": total_packets,
+                    "total_bytes": total_bytes,
+                    "bytes_per_second": round(bytes_per_second, 6),
+                    "bytes_per_packet": round(bytes_per_packet, 6),
+                }
+            )
+        elif protocol == "dns":
+            metrics = dns_lexical_metrics(record.get("query"))
+            port = clean(record.get("id.resp_p"))
+            benign = bool(
+                port == "5353"
+                or metrics["is_local_tld"]
+                or metrics["is_reverse_lookup"]
+                or metrics["is_service_discovery"]
+            )
+            dga_like = bool(metrics["dga_like"] and not benign)
+            answers = zeek_values(record.get("answers"))
+            no_answer = not answers
+            bucket.derived_sums["query_entropy"] += metrics["query_entropy"]
+            bucket.derived_sums["first_label_length"] += metrics[
+                "first_label_length"
+            ]
+            bucket.derived_maxes["query_entropy"] = max(
+                bucket.derived_maxes["query_entropy"], metrics["query_entropy"]
+            )
+            bucket.derived_maxes["first_label_length"] = max(
+                bucket.derived_maxes["first_label_length"],
+                metrics["first_label_length"],
+            )
+            if metrics["tld"]:
+                bucket.derived_sets["dns_tlds"].add(metrics["tld"])
+            if dga_like:
+                bucket.derived_counts["dga_like"] += 1
+                bucket.dns_patterns[metrics["pattern"]] += 1
+            if no_answer:
+                bucket.derived_counts["no_answer"] += 1
+            if zeek_bool(record.get("rejected")):
+                bucket.derived_counts["rejected"] += 1
+            if benign:
+                bucket.derived_counts["benign_dns"] += 1
+            flags.update(
+                {
+                    "dga_like": dga_like,
+                    "no_answer": no_answer,
+                    "rejected": zeek_bool(record.get("rejected")),
+                    "benign_dns": benign,
+                }
+            )
+            details.update(metrics)
+            details["answer_count"] = len(answers)
+        elif protocol == "http":
+            uri = clean(record.get("uri"))
+            linked_fuids = zeek_values(record.get("_linked_fuids"))
+            bucket.derived_sums["uri_length"] += len(uri)
+            bucket.derived_maxes["uri_length"] = max(
+                bucket.derived_maxes["uri_length"], len(uri)
+            )
+            if uri:
+                bucket.derived_sets["uris"].add(uri)
+            bucket.derived_sums["linked_file_count"] += number(
+                record.get("_linked_file_count")
+            )
+            bucket.derived_sums["linked_file_bytes"] += number(
+                record.get("_linked_file_bytes")
+            )
+            bucket.derived_sets["linked_file_mimes"].update(
+                zeek_values(record.get("_linked_file_mimes"))
+            )
+            flags["linked_file"] = bool(linked_fuids)
+            details.update(
+                {
+                    "uri": uri,
+                    "uri_length": len(uri),
+                    "linked_fuids": linked_fuids,
+                    "linked_file_count": number(record.get("_linked_file_count")),
+                    "linked_file_bytes": number(record.get("_linked_file_bytes")),
+                    "linked_file_mimes": zeek_values(
+                        record.get("_linked_file_mimes")
+                    ),
+                }
+            )
+        elif protocol == "files":
+            byte_gap = abs(
+                number(record.get("total_bytes"))
+                - number(record.get("seen_bytes"))
+            )
+            bucket.derived_sums["byte_gap"] += byte_gap
+            bucket.derived_maxes["byte_gap"] = max(
+                bucket.derived_maxes["byte_gap"], byte_gap
+            )
+            details["byte_gap"] = byte_gap
+        elif protocol == "ssh":
+            attempts = number(record.get("auth_attempts"))
+            bucket.derived_maxes["auth_attempts"] = max(
+                bucket.derived_maxes["auth_attempts"], attempts
+            )
+            details["auth_attempts"] = attempts
+
+        uid_protocols = zeek_values(record.get("_uid_protocols"))
+        linked_fuids = zeek_values(record.get("_linked_fuids"))
+        if uid_protocols:
+            details["uid_protocols"] = uid_protocols
+        if linked_fuids:
+            details["linked_fuids"] = linked_fuids
+        details["uid_weird_count"] = int(number(record.get("_uid_weird_count")))
+        details["uid_notice_count"] = int(number(record.get("_uid_notice_count")))
+        flags["cross_log_uid"] = len(uid_protocols) >= 2
+        return details, flags
 
     def ssl_confidence(
         self,
@@ -545,7 +829,10 @@ class MultiProtocolDetector:
             "_known_server_bytes": total_bytes is not None and not new_server,
         }
 
-        detecting = state.trained_hours >= self.args.training_hours
+        detecting = (
+            not self.force_training
+            and state.trained_hours >= self.args.training_hours
+        )
         reasons: list[dict[str, Any]] = []
         server_model = state.ssl_server_models.setdefault(
             server, AdaptiveStats()
@@ -630,6 +917,8 @@ class MultiProtocolDetector:
                 "window_seconds": self.args.window_seconds,
                 "uid": uid,
                 "server": server,
+                "responsible_uids": [uid] if uid else [],
+                "responsible_fuids": [],
                 "reasons": reasons,
                 "responsible_flow_count": 1,
                 "responsible_flows": [public_flow],
@@ -674,7 +963,7 @@ class MultiProtocolDetector:
         self,
         bucket: ProtocolBucket,
         reasons: list[dict[str, Any]],
-    ) -> tuple[list[dict[str, Any]], int]:
+    ) -> tuple[list[dict[str, Any]], int, dict[str, list[str]]]:
         selected: dict[str, dict[str, Any]] = {}
         preferred_keys: list[str] = []
         per_reason_limit = max(
@@ -709,6 +998,93 @@ class MultiProtocolDetector:
                 candidates = list(by_server.values())
             elif feature == "failure_ratio":
                 candidates = [f for f in candidates if f["_failure"]]
+            elif feature == "max_ports_per_destination":
+                largest = max(
+                    (len(ports) for ports in bucket.destination_ports.values()),
+                    default=0,
+                )
+                destinations = {
+                    destination
+                    for destination, ports in bucket.destination_ports.items()
+                    if len(ports) == largest
+                }
+                candidates = [
+                    flow for flow in candidates if flow.get("dst") in destinations
+                ]
+            elif feature in {
+                "failed_scan_ratio",
+                "scan_history_ratio",
+                "short_connection_ratio",
+                "zero_payload_ratio",
+                "missing_service_ratio",
+                "established_session_ratio",
+                "dga_like_count",
+                "dga_like_ratio",
+                "no_answer_ratio",
+                "rejected_ratio",
+                "linked_file_count",
+                "linked_file_bytes",
+            }:
+                flag = {
+                    "failed_scan_ratio": "failed_scan",
+                    "scan_history_ratio": "scan_history",
+                    "short_connection_ratio": "short_connection",
+                    "zero_payload_ratio": "zero_payload",
+                    "missing_service_ratio": "missing_service",
+                    "established_session_ratio": "established_session",
+                    "dga_like_count": "dga_like",
+                    "dga_like_ratio": "dga_like",
+                    "no_answer_ratio": "no_answer",
+                    "rejected_ratio": "rejected",
+                    "linked_file_count": "linked_file",
+                    "linked_file_bytes": "linked_file",
+                }[feature]
+                candidates = [
+                    flow
+                    for flow in candidates
+                    if flow.get("_derived_flags", {}).get(flag)
+                ]
+            elif feature in {
+                "avg_query_entropy",
+                "max_query_entropy",
+                "avg_first_label_length",
+                "max_first_label_length",
+                "avg_bytes_per_second",
+                "max_bytes_per_second",
+                "avg_bytes_per_packet",
+                "total_packets",
+                "total_byte_gap",
+                "max_byte_gap",
+                "max_auth_attempts",
+                "avg_uri_length",
+                "max_uri_length",
+            }:
+                detail_name = {
+                    "avg_query_entropy": "query_entropy",
+                    "max_query_entropy": "query_entropy",
+                    "avg_first_label_length": "first_label_length",
+                    "max_first_label_length": "first_label_length",
+                    "avg_bytes_per_second": "bytes_per_second",
+                    "max_bytes_per_second": "bytes_per_second",
+                    "avg_bytes_per_packet": "bytes_per_packet",
+                    "total_packets": "total_packets",
+                    "total_byte_gap": "byte_gap",
+                    "max_byte_gap": "byte_gap",
+                    "max_auth_attempts": "auth_attempts",
+                    "avg_uri_length": "uri_length",
+                    "max_uri_length": "uri_length",
+                }[feature]
+                candidates = sorted(
+                    [
+                        flow
+                        for flow in candidates
+                        if detail_name in flow.get("details", {})
+                    ],
+                    key=lambda flow: number(
+                        flow.get("details", {}).get(detail_name)
+                    ),
+                    reverse=reason["direction"] == "higher",
+                )
             elif feature.startswith("new_"):
                 field_name = feature.removeprefix("new_")
                 candidates = [
@@ -770,7 +1146,8 @@ class MultiProtocolDetector:
             result.append(
                 {key: value for key, value in flow.items() if not key.startswith("_")}
             )
-        return result, total
+        identifiers = flow_identifier_fields(list(selected.values()))
+        return result, total, identifiers
 
     def target_features(self, bucket: TargetBucket) -> dict[str, float]:
         return {
@@ -787,7 +1164,7 @@ class MultiProtocolDetector:
         self,
         bucket: TargetBucket,
         reasons: list[dict[str, Any]],
-    ) -> tuple[list[dict[str, Any]], int]:
+    ) -> tuple[list[dict[str, Any]], int, dict[str, list[str]]]:
         selected: dict[str, dict[str, Any]] = {}
         preferred_keys: list[str] = []
         per_reason_limit = max(
@@ -851,7 +1228,8 @@ class MultiProtocolDetector:
             result.append(
                 {key: value for key, value in flow.items() if not key.startswith("_")}
             )
-        return result, total
+        identifiers = flow_identifier_fields(list(selected.values()))
+        return result, total, identifiers
 
     def observe_target(
         self,
@@ -908,6 +1286,10 @@ class MultiProtocolDetector:
                     "conn_state": clean(record.get("conn_state")),
                     "status_code": clean(record.get("status_code")),
                     "rcode_name": clean(record.get("rcode_name")),
+                    "uid_protocols": zeek_values(
+                        record.get("_uid_protocols")
+                    ),
+                    "linked_fuids": zeek_values(record.get("_linked_fuids")),
                 },
                 "_new_source": source in bucket.new_sources,
                 "_new_port": port in bucket.new_ports,
@@ -922,7 +1304,10 @@ class MultiProtocolDetector:
         if bucket is None:
             return
         features = self.target_features(bucket)
-        training = state.trained_hours < self.args.training_hours
+        training = (
+            self.force_training
+            or state.trained_hours < self.args.training_hours
+        )
         reasons: list[dict[str, Any]] = []
         zscores: dict[str, float] = {}
         for name, value in features.items():
@@ -962,9 +1347,10 @@ class MultiProtocolDetector:
                         "explanation": explanation,
                     }
                 )
-        self.output.write(
-            "target_data",
-            {
+        if not self.suppress_output:
+            self.output.write(
+                "target_data",
+                {
                 "event": "target_hourly_data",
                 "target": target,
                 "host": target,
@@ -976,13 +1362,15 @@ class MultiProtocolDetector:
                 "features": features,
                 "zscores": zscores,
                 "protocols": sorted(bucket.protocols),
-            },
-        )
+                },
+            )
         score = sum(reason["zscore"] for reason in reasons)
         if reasons:
-            responsible_flows, responsible_count = self.target_attribute_flows(
-                bucket, reasons
-            )
+            (
+                responsible_flows,
+                responsible_count,
+                identifiers,
+            ) = self.target_attribute_flows(bucket, reasons)
             event = {
                 "event": "target_anomaly",
                 "type": "target-hour",
@@ -1002,10 +1390,12 @@ class MultiProtocolDetector:
                 "reasons": reasons,
                 "responsible_flow_count": responsible_count,
                 "responsible_flows": responsible_flows,
+                **identifiers,
                 **importance_metrics(reasons, score, protocol_count=len(bucket.protocols)),
             }
             self.target_anomalies.append(event)
-            self.output.write("target", event)
+            if not self.suppress_output:
+                self.output.write("target", event)
         if training:
             for name, value in features.items():
                 state.models[name].fit(transform(value))
@@ -1085,6 +1475,10 @@ class MultiProtocolDetector:
             for field_name in (*spec["categorical"], *spec["numeric"])
             if clean(record.get(field_name))
         }
+        derived_details, derived_flags = self.observe_derived_features(
+            protocol, record, peer, bucket
+        )
+        details.update(derived_details)
         generic_flow = {
                 "log": protocol,
                 "ts": ts,
@@ -1098,6 +1492,7 @@ class MultiProtocolDetector:
                 "_new_peer": new_peer,
                 "_new_fields": new_fields,
                 "_failure": is_failure,
+                "_derived_flags": derived_flags,
             }
         if ssl_flow is not None:
             # Keep specialized SSL attribution fields while retaining generic
@@ -1107,6 +1502,7 @@ class MultiProtocolDetector:
                     "_new_peer": new_peer,
                     "_new_fields": new_fields,
                     "_failure": is_failure,
+                    "_derived_flags": derived_flags,
                 }
             )
             ssl_flow["details"].update(details)
@@ -1165,6 +1561,106 @@ class MultiProtocolDetector:
                 bucket.numeric_sums[field_name]
                 / max(1, bucket.numeric_counts[field_name])
             )
+        events = max(1, bucket.events)
+        if protocol == "conn":
+            result.update(
+                {
+                    "max_ports_per_destination": float(
+                        max(
+                            (
+                                len(ports)
+                                for ports in bucket.destination_ports.values()
+                            ),
+                            default=0,
+                        )
+                    ),
+                    "failed_scan_ratio": bucket.derived_counts["failed_scan"]
+                    / events,
+                    "scan_history_ratio": bucket.derived_counts["scan_history"]
+                    / events,
+                    "short_connection_ratio": bucket.derived_counts[
+                        "short_connection"
+                    ]
+                    / events,
+                    "zero_payload_ratio": bucket.derived_counts["zero_payload"]
+                    / events,
+                    "missing_service_ratio": bucket.derived_counts[
+                        "missing_service"
+                    ]
+                    / events,
+                    "established_session_ratio": bucket.derived_counts[
+                        "established_session"
+                    ]
+                    / events,
+                    "total_packets": bucket.derived_sums["total_packets"],
+                    "avg_bytes_per_second": bucket.derived_sums[
+                        "bytes_per_second"
+                    ]
+                    / events,
+                    "max_bytes_per_second": bucket.derived_maxes[
+                        "bytes_per_second"
+                    ],
+                    "avg_bytes_per_packet": bucket.derived_sums[
+                        "bytes_per_packet"
+                    ]
+                    / events,
+                }
+            )
+        elif protocol == "dns":
+            result.update(
+                {
+                    "avg_query_entropy": bucket.derived_sums["query_entropy"]
+                    / events,
+                    "max_query_entropy": bucket.derived_maxes["query_entropy"],
+                    "avg_first_label_length": bucket.derived_sums[
+                        "first_label_length"
+                    ]
+                    / events,
+                    "max_first_label_length": bucket.derived_maxes[
+                        "first_label_length"
+                    ],
+                    "dga_like_count": float(bucket.derived_counts["dga_like"]),
+                    "dga_like_ratio": bucket.derived_counts["dga_like"] / events,
+                    "repeated_dga_pattern_count": float(
+                        sum(max(0, count - 1) for count in bucket.dns_patterns.values())
+                    ),
+                    "unique_tlds": float(len(bucket.derived_sets["dns_tlds"])),
+                    "no_answer_ratio": bucket.derived_counts["no_answer"]
+                    / events,
+                    "rejected_ratio": bucket.derived_counts["rejected"]
+                    / events,
+                    "benign_dns_ratio": bucket.derived_counts["benign_dns"]
+                    / events,
+                }
+            )
+        elif protocol == "http":
+            result.update(
+                {
+                    "unique_uris": float(len(bucket.derived_sets["uris"])),
+                    "avg_uri_length": bucket.derived_sums["uri_length"] / events,
+                    "max_uri_length": bucket.derived_maxes["uri_length"],
+                    "linked_file_count": bucket.derived_sums[
+                        "linked_file_count"
+                    ],
+                    "linked_file_bytes": bucket.derived_sums[
+                        "linked_file_bytes"
+                    ],
+                    "unique_linked_file_mimes": float(
+                        len(bucket.derived_sets["linked_file_mimes"])
+                    ),
+                }
+            )
+        elif protocol == "files":
+            result.update(
+                {
+                    "total_byte_gap": bucket.derived_sums["byte_gap"],
+                    "max_byte_gap": bucket.derived_maxes["byte_gap"],
+                }
+            )
+        elif protocol == "ssh":
+            result["max_auth_attempts"] = bucket.derived_maxes[
+                "auth_attempts"
+            ]
         return result
 
     def finalize(
@@ -1174,7 +1670,10 @@ class MultiProtocolDetector:
         if bucket is None:
             return
         features = self.features(protocol, bucket)
-        training = state.trained_hours < self.args.training_hours
+        training = (
+            self.force_training
+            or state.trained_hours < self.args.training_hours
+        )
         reasons: list[dict[str, Any]] = []
         zscores: dict[str, float] = {}
         for name, value in features.items():
@@ -1231,9 +1730,10 @@ class MultiProtocolDetector:
                         "explanation": explanation,
                     }
                 )
-        self.output.write(
-            "data",
-            {
+        if not self.suppress_output:
+            self.output.write(
+                "data",
+                {
                 "event": "protocol_hourly_data",
                 "host": host,
                 "protocol": protocol,
@@ -1244,13 +1744,15 @@ class MultiProtocolDetector:
                 "trained_hours": state.trained_hours,
                 "features": features,
                 "zscores": zscores,
-            },
-        )
+                },
+            )
         score = sum(reason["zscore"] for reason in reasons)
         if reasons:
-            responsible_flows, responsible_count = self.attribute_flows(
-                bucket, reasons
-            )
+            (
+                responsible_flows,
+                responsible_count,
+                identifiers,
+            ) = self.attribute_flows(bucket, reasons)
             severity = 1.0 - math.exp(-max(
                 reason["zscore"] for reason in reasons
             ) / 3.0)
@@ -1273,10 +1775,12 @@ class MultiProtocolDetector:
                 "reasons": reasons,
                 "responsible_flow_count": responsible_count,
                 "responsible_flows": responsible_flows,
+                **identifiers,
                 **importance_metrics(reasons, score),
             }
             self.protocol_anomalies.append(event)
-            self.output.write("protocol", event)
+            if not self.suppress_output:
+                self.output.write("protocol", event)
         if training:
             for name, value in features.items():
                 state.models[name].fit(transform(value))
@@ -1321,9 +1825,10 @@ class MultiProtocolDetector:
             mode = (
                 "drift_update" if small else "suspicious_update"
             )
-        self.output.write(
-            "events",
-            {
+        if not self.suppress_output:
+            self.output.write(
+                "events",
+                {
                 "event": "model_update",
                 "host": host,
                 "protocol": protocol,
@@ -1332,13 +1837,59 @@ class MultiProtocolDetector:
                 "window_seconds": self.args.window_seconds,
                 "mode": mode,
                 "score": round(score, 3),
-            },
-        )
+                },
+            )
         state.bucket = None
 
     def finalize_all(self) -> None:
         for (host, protocol), state in self.states.items():
             self.finalize(host, protocol, state)
+
+    def calibrate_baseline(self) -> None:
+        """Calibrate every model after explicitly normal traffic is fitted."""
+        for (_, protocol), state in self.states.items():
+            for feature_name, model in state.models.items():
+                fallback = (
+                    self.args.ssl_hourly_threshold
+                    if protocol == "ssl"
+                    and feature_name
+                    in {
+                        "ssl_flows",
+                        "unique_servers",
+                        "new_servers",
+                        "ja3_changes",
+                        "known_server_avg_bytes",
+                    }
+                    else self.args.threshold
+                )
+                model.calibrate(fallback, self.args.threshold_quantile)
+            for model in state.ssl_server_models.values():
+                model.calibrate(
+                    self.args.ssl_flow_threshold,
+                    self.args.threshold_quantile,
+                )
+            state.calibrated = True
+            state.trained_hours = max(
+                state.trained_hours, self.args.training_hours
+            )
+        for state in self.target_states.values():
+            for model in state.models.values():
+                model.calibrate(
+                    self.args.threshold, self.args.threshold_quantile
+                )
+            state.calibrated = True
+            state.trained_hours = max(
+                state.trained_hours, self.args.training_hours
+            )
+
+    def reset_run_counters(self) -> None:
+        """Keep learned state but exclude baseline input from run statistics."""
+        self.records_by_protocol.clear()
+        self.skipped_no_ip.clear()
+        self.ssl_conn_matches = 0
+        self.protocol_anomalies.clear()
+        self.target_anomalies.clear()
+        self.flow_anomalies.clear()
 
     def ensemble(self) -> list[dict[str, Any]]:
         self.output.reporter.section(
@@ -1371,7 +1922,28 @@ class MultiProtocolDetector:
                 self.args.corroboration_bonus_cap,
                 max(0, len(protocols) - 1) * self.args.corroboration_bonus,
             )
-            global_score = min(1.0, vote_sum + corroboration)
+            uid_owners: dict[str, set[str]] = defaultdict(set)
+            fuid_owners: dict[str, set[str]] = defaultdict(set)
+            for component, item in by_protocol.items():
+                for uid in item.get("responsible_uids", []):
+                    uid_owners[uid].add(component)
+                for fuid in item.get("responsible_fuids", []):
+                    fuid_owners[fuid].add(component)
+            shared_uids = sorted(
+                uid for uid, owners in uid_owners.items() if len(owners) >= 2
+            )
+            shared_fuids = sorted(
+                fuid
+                for fuid, owners in fuid_owners.items()
+                if len(owners) >= 2
+            )
+            uid_corroboration = min(
+                self.args.uid_corroboration_bonus_cap,
+                len(shared_uids) * self.args.uid_corroboration_bonus,
+            )
+            global_score = min(
+                1.0, vote_sum + corroboration + uid_corroboration
+            )
             effective_global_threshold = min(
                 1.0, self.args.global_threshold / self.args.sensitivity
             )
@@ -1405,6 +1977,11 @@ class MultiProtocolDetector:
                 "protocols": protocols,
                 "protocol_contributions": contributions,
                 "corroboration_bonus": round(corroboration, 4),
+                "uid_corroboration_bonus": round(uid_corroboration, 4),
+                "shared_uids": shared_uids,
+                "shared_fuids": shared_fuids,
+                "responsible_uids": sorted(uid_owners),
+                "responsible_fuids": sorted(fuid_owners),
                 "effective_global_threshold": round(
                     effective_global_threshold, 4
                 ),
@@ -1470,6 +2047,106 @@ class MultiProtocolDetector:
         return global_events
 
 
+Observation = tuple[float, str, dict[str, Any], str, str]
+
+
+def enrich_cross_log_context(observations: list[Observation]) -> None:
+    """Attach exact UID and file-transfer context before window aggregation."""
+    uid_protocols: dict[str, set[str]] = defaultdict(set)
+    uid_weird: dict[str, int] = defaultdict(int)
+    uid_notice: dict[str, int] = defaultdict(int)
+    files: dict[str, dict[str, Any]] = {}
+    for _, protocol, record, _, _ in observations:
+        uid = clean(record.get("uid"))
+        if uid:
+            uid_protocols[uid].add(protocol)
+            if protocol == "weird":
+                uid_weird[uid] += 1
+            elif protocol == "notice":
+                uid_notice[uid] += 1
+        if protocol == "files":
+            fuid = clean(record.get("fuid"))
+            if fuid:
+                files[fuid] = {
+                    "bytes": max(
+                        number(record.get("total_bytes")),
+                        number(record.get("seen_bytes")),
+                    ),
+                    "mime": clean(record.get("mime_type")),
+                }
+    for _, protocol, record, _, _ in observations:
+        uid = clean(record.get("uid"))
+        if uid:
+            record["_uid_protocols"] = sorted(uid_protocols[uid])
+            record["_uid_weird_count"] = uid_weird[uid]
+            record["_uid_notice_count"] = uid_notice[uid]
+        if protocol != "http":
+            continue
+        linked: list[str] = []
+        for field_name in ("resp_fuids", "orig_fuids", "fuid"):
+            for fuid in zeek_values(record.get(field_name)):
+                if fuid not in linked:
+                    linked.append(fuid)
+        linked_files = [files[fuid] for fuid in linked if fuid in files]
+        record["_linked_fuids"] = linked
+        record["_linked_file_count"] = len(linked_files)
+        record["_linked_file_bytes"] = sum(
+            item["bytes"] for item in linked_files
+        )
+        record["_linked_file_mimes"] = sorted(
+            {item["mime"] for item in linked_files if item["mime"]}
+        )
+
+
+def collect_observations(
+    directory: Path,
+    args: argparse.Namespace,
+    detector: MultiProtocolDetector,
+) -> tuple[list[Observation], list[tuple[str, Path]], list[str]]:
+    logs, skipped = discover_logs(directory)
+    observations: list[Observation] = []
+    connections: dict[str, dict[str, Any]] = {}
+    for protocol, path in logs:
+        for record in ZeekReader(path):
+            uid = clean(record.get("uid"))
+            if protocol == "conn" and uid:
+                connections[uid] = record
+            host = source_ip(record, protocol)
+            if not host:
+                detector.skipped_no_ip[protocol] += 1
+                continue
+            peer = peer_ip(record, protocol)
+            if args.ignore_multicast_broadcast and is_ignored_multicast_broadcast(
+                host, peer
+            ):
+                continue
+            observations.append(
+                (number(record.get("ts")), protocol, record, host, peer)
+            )
+    for _, protocol, record, _, _ in observations:
+        if protocol != "ssl":
+            continue
+        conn = connections.get(clean(record.get("uid")))
+        if conn:
+            record["_conn_total_bytes"] = number(
+                conn.get("orig_bytes")
+            ) + number(conn.get("resp_bytes"))
+    enrich_cross_log_context(observations)
+    observations.sort(key=lambda item: item[0])
+    return observations, logs, skipped
+
+
+def process_observations(
+    detector: MultiProtocolDetector, observations: list[Observation]
+) -> None:
+    for ts, protocol, record, host, peer in observations:
+        detector.observe(protocol, record, host, ts)
+        if peer:
+            detector.observe_target(protocol, record, host, peer, ts)
+    detector.finalize_all()
+    detector.finalize_targets()
+
+
 def discover_logs(directory: Path) -> tuple[list[tuple[str, Path]], list[str]]:
     selected = []
     skipped = []
@@ -1518,6 +2195,17 @@ def parser(
         type=int,
         default=settings["window_seconds"],
         help="aggregation window size in seconds (default: 3600)",
+    )
+    result.add_argument(
+        "--normal-dir",
+        dest="normal_dirs",
+        action="append",
+        type=Path,
+        default=parse_normal_dirs(settings["normal_dirs"]),
+        help=(
+            "Zeek directory known to be normal; repeat to fit external "
+            "baseline windows before analyzing zeek_dir"
+        ),
     )
     result.add_argument(
         "--sensitivity",
@@ -1586,6 +2274,16 @@ def parser(
         default=settings["corroboration_bonus_cap"],
     )
     result.add_argument(
+        "--uid-corroboration-bonus",
+        type=float,
+        default=settings["uid_corroboration_bonus"],
+    )
+    result.add_argument(
+        "--uid-corroboration-bonus-cap",
+        type=float,
+        default=settings["uid_corroboration_bonus_cap"],
+    )
+    result.add_argument(
         "--max-responsible-flows",
         type=int,
         default=settings["max_responsible_flows"],
@@ -1650,6 +2348,10 @@ def main(argv: Optional[list[str]] = None) -> int:
     if not args.zeek_dir.is_dir():
         print(f"error: not a directory: {args.zeek_dir}", file=sys.stderr)
         return 2
+    for normal_dir in args.normal_dirs:
+        if not normal_dir.is_dir():
+            print(f"error: not a directory: {normal_dir}", file=sys.stderr)
+            return 2
     if (
         args.training_hours < 0
         or args.window_seconds < 1
@@ -1658,6 +2360,8 @@ def main(argv: Optional[list[str]] = None) -> int:
         or not 0 <= args.threshold_quantile <= 1
         or args.sensitivity <= 0
         or args.max_responsible_flows < 1
+        or args.uid_corroboration_bonus < 0
+        or args.uid_corroboration_bonus_cap < 0
     ):
         print("error: invalid detector parameters", file=sys.stderr)
         return 2
@@ -1677,7 +2381,8 @@ def main(argv: Optional[list[str]] = None) -> int:
         f"input={args.zeek_dir} protocols={len(logs)} "
         f"config={args.config} sensitivity={args.sensitivity} "
         f"training_windows={args.training_hours} "
-        f"window_seconds={args.window_seconds}",
+        f"window_seconds={args.window_seconds} "
+        f"normal_dirs={len(args.normal_dirs)}",
     )
     output.reporter.section(
         "PROTOCOL-WINDOW DATA AND ANOMALIES",
@@ -1698,48 +2403,47 @@ def main(argv: Optional[list[str]] = None) -> int:
             "training_hours": args.training_hours,
             "training_windows": args.training_hours,
             "window_seconds": args.window_seconds,
+            "normal_dirs": [str(path) for path in args.normal_dirs],
             "sensitivity": args.sensitivity,
         },
     )
     try:
-        observations: list[tuple[float, str, dict[str, Any], str, str]] = []
-        connections: dict[str, dict[str, Any]] = {}
-        for protocol, path in logs:
-            for record in ZeekReader(path):
-                if protocol == "conn" and clean(record.get("uid")):
-                    connections[clean(record.get("uid"))] = record
-                host = source_ip(record, protocol)
-                if not host:
-                    detector.skipped_no_ip[protocol] += 1
-                    continue
-                peer = peer_ip(record, protocol)
-                if args.ignore_multicast_broadcast and is_ignored_multicast_broadcast(
-                    host, peer
-                ):
-                    continue
-                observations.append(
-                    (number(record.get("ts")), protocol, record, host, peer)
+        baseline_records = 0
+        if args.normal_dirs:
+            detector.force_training = True
+            detector.suppress_output = True
+            for normal_dir in args.normal_dirs:
+                normal_observations, normal_logs, _ = collect_observations(
+                    normal_dir, args, detector
                 )
-        for _, protocol, record, _, _ in observations:
-            if protocol != "ssl":
-                continue
-            conn = connections.get(clean(record.get("uid")))
-            if conn:
-                record["_conn_total_bytes"] = (
-                    number(conn.get("orig_bytes"))
-                    + number(conn.get("resp_bytes"))
-                )
-        observations.sort(key=lambda item: item[0])
-        for ts, protocol, record, host, peer in observations:
-            detector.observe(protocol, record, host, ts)
-            if peer:
-                detector.observe_target(protocol, record, host, peer, ts)
-        detector.finalize_all()
-        detector.finalize_targets()
+                if not normal_logs:
+                    raise ValueError(
+                        f"no supported Zeek protocol logs found in normal "
+                        f"directory: {normal_dir}"
+                    )
+                baseline_records += len(normal_observations)
+                process_observations(detector, normal_observations)
+            detector.calibrate_baseline()
+            detector.force_training = False
+            detector.suppress_output = False
+            detector.reset_run_counters()
+            output.write(
+                "events",
+                {
+                    "event": "external_baseline_loaded",
+                    "normal_dirs": [str(path) for path in args.normal_dirs],
+                    "records": baseline_records,
+                },
+            )
+        observations, _, _ = collect_observations(
+            args.zeek_dir, args, detector
+        )
+        process_observations(detector, observations)
         global_events = detector.ensemble()
         summary = {
             "window_seconds": args.window_seconds,
             "training_windows": args.training_hours,
+            "external_baseline_records": baseline_records,
             "records_processed": sum(detector.records_by_protocol.values()),
             "records_by_protocol": dict(sorted(detector.records_by_protocol.items())),
             "records_skipped_without_ip": dict(
@@ -1791,6 +2495,7 @@ def main(argv: Optional[list[str]] = None) -> int:
             ("Target IPs", summary["targets"]),
             ("Window seconds", args.window_seconds),
             ("Training windows", args.training_hours),
+            ("External baseline records", summary["external_baseline_records"]),
             ("Sensitivity", args.sensitivity),
             ("Protocol anomalies", summary["protocol_anomalies"]),
             ("Target anomalies", summary["target_anomalies"]),
