@@ -19,6 +19,17 @@ def write_zeek_log(path: Path, fields: list[str], row: list[str]) -> None:
 
 
 class DashboardTests(unittest.TestCase):
+    def test_runtime_state_is_outside_application_directory(self):
+        self.assertNotEqual(dashboard.STATE_DIR, dashboard.ROOT)
+        self.assertNotEqual(dashboard.RUNS_DIR.parent, dashboard.ROOT)
+        self.assertEqual(
+            dashboard.RUNS_DIR, dashboard.STATE_DIR / "runs"
+        )
+        self.assertEqual(
+            dashboard.SAVED_CONFIG,
+            dashboard.STATE_DIR / "anomaly_detector.conf",
+        )
+
     def test_relative_paths_start_from_dashboard_launch_directory(self):
         with tempfile.TemporaryDirectory() as temp:
             launch_dir = Path(temp)
