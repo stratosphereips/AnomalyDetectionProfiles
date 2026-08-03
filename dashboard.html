@@ -30,6 +30,12 @@
     button { color: var(--text); border: 1px solid var(--line); background: var(--panel2);
       border-radius: 8px; padding: 9px 13px; cursor: pointer; white-space: nowrap; }
     button:hover { border-color: #42688e; background: #18304c; }
+    .guide-link { display: inline-flex; align-items: center; gap: 8px; padding: 9px 13px;
+      border: 1px solid rgba(207,124,255,.48); border-radius: 8px; color: #f2dcff;
+      background: linear-gradient(135deg, rgba(207,124,255,.18), rgba(72,168,255,.14));
+      box-shadow: 0 7px 22px rgba(125,88,220,.15); font-weight: 750; text-decoration: none; white-space: nowrap; }
+    .guide-link:hover { border-color: var(--magenta); background: linear-gradient(135deg, rgba(207,124,255,.28), rgba(72,168,255,.22)); }
+    .guide-link .book { font-size: 16px; }
     .run { border: 0; background: linear-gradient(135deg, #208be8, #4a65ee); font-weight: 750; padding: 11px 20px; }
     .run:disabled { opacity: .55; cursor: wait; }
     .layout { width: 100%; display: grid; grid-template-columns: 360px minmax(0,1fr); min-height: calc(100vh - 70px); }
@@ -148,6 +154,9 @@
       <input id="zeekPath" type="text" aria-label="Zeek folder">
       <button id="browseBtn">Browse folders</button>
     </div>
+    <a class="guide-link" href="/docs/" target="_blank" rel="noopener" title="Learn how records become anomaly scores">
+      <span class="book" aria-hidden="true">◈</span><span>How detection works</span>
+    </a>
     <label class="toggle-row" title="Rerun 700 ms after a parameter changes"><span>Auto-run</span>&nbsp;<input id="autoRun" type="checkbox"></label>
     <button id="runBtn" class="run">Run analysis</button>
   </header>
