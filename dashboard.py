@@ -51,6 +51,7 @@ DETECTED_LOGS = {
     "ntlm",
     "smb_mapping",
     "software",
+    "ssh",
     "ssl",
     "weird",
 }
@@ -65,6 +66,11 @@ SETTING_METADATA = {
     "window_seconds": (
         "Window size (seconds)",
         "Aggregation interval. Use 300 for 5-minute windows or 3600 for hourly windows.",
+    ),
+    "normal_dirs": (
+        "Known-normal Zeek folders",
+        "Optional comma-separated folders fitted as benign before the selected "
+        "folder is analyzed. Paths are on the computer running the dashboard.",
     ),
     "sensitivity": ("Global sensitivity", "Higher values emit more anomalies; lower values emit fewer."),
     "ignore_multicast_broadcast": ("Ignore multicast/broadcast", "Skip multicast and broadcast flows entirely when enabled."),
@@ -83,6 +89,14 @@ SETTING_METADATA = {
     "minimum_protocols": ("Minimum protocols", "Independent protocol votes sufficient to alert."),
     "corroboration_bonus": ("Corroboration bonus", "Bonus for each additional anomalous protocol."),
     "corroboration_bonus_cap": ("Corroboration cap", "Maximum total corroboration bonus."),
+    "uid_corroboration_bonus": (
+        "Exact UID bonus",
+        "Bonus for each UID responsible for anomalies in multiple components.",
+    ),
+    "uid_corroboration_bonus_cap": (
+        "Exact UID bonus cap",
+        "Maximum score added by exact cross-log UID corroboration.",
+    ),
     "max_responsible_flows": ("Responsible flow limit", "Maximum representative flows embedded per anomaly."),
     "ssl_hourly_threshold": ("SSL window z threshold", "Fallback threshold for specialized SSL window features."),
     "ssl_flow_threshold": ("SSL flow z threshold", "Threshold for bytes to a known TLS server."),
