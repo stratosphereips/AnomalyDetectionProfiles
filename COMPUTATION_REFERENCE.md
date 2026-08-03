@@ -182,6 +182,14 @@ Zero training is thus an adaptive cold start, not baseline-free anomaly
 detection. It is appropriate only when no trusted benign prefix is available;
 the earliest observations necessarily influence the baseline.
 
+When `normal_dirs` or `--normal-dir` is set, all supported windows from those
+folders pass through the Welford training branch before the analyzed folder.
+They emit no data or anomaly events. The detector then calibrates every fitted
+model, retains its per-IP/protocol state, clears run counters, and processes the
+selected folder. External observations count as prior model points but not as
+analyzed records. A model absent from external input starts with the configured
+training or cold-start behavior.
+
 For each transformed benign value \(y_n\), training uses Welford moments:
 
 $$
@@ -511,19 +519,35 @@ $$
 
 ### Protocol-specific fields
 
+Connection-derived features include destination-port fan-out, ratios of failed
+scan states, scan-like histories, short connections, zero payload, missing
+services and established sessions, plus packet totals and transfer rates.
+DNS-derived values include first-label length and Shannon entropy, DGA-like and
+repeated-pattern counts, TLD diversity, and answer/rejection ratios. The
+DGA-like predicate requires a first label of at least eight characters,
+entropy of at least `2.8`, unique-character ratio of at least `0.55`, and
+either vowel ratio at most `0.45` or digit ratio at least `0.10`; mDNS,
+`.local`, reverse DNS, and service discovery are excluded.
+
+HTTP adds URI diversity and lengths plus exact-FUID-linked file counts, bytes,
+and MIME diversity. Files add the absolute total-versus-seen byte gap. SSH adds
+maximum authentication attempts. These values are adaptive window features;
+none is a fixed standalone alert threshold.
+
 | Protocol | Categorical fields | Numeric fields | Failure condition |
 | -------- | ------------------ | -------------- | ----------------- |
 | `conn` | Destination port, service, state | Origin/response bytes, duration, missed bytes | State is neither `SF` nor `S1` |
 | `dns` | Query, query type, response code | RTT | `NXDOMAIN`, `SERVFAIL`, or `REFUSED` |
-| `http` | Host, method, status, user agent | Request/response body lengths | Status is at least `400` |
+| `http` | Host, method, status, user agent | Request/response body lengths, transaction depth | Status is at least `400` |
 | `ssl` | Server, version, cipher, JA3, JA3S, validation | None | `established` is `F` |
-| `files` | Source, MIME, filename, SHA-256 | Seen/total/missing bytes, duration | Timed out or missing bytes are positive |
+| `files` | Source, MIME, filename, SHA-256 | Seen/total/missing/overflow bytes, duration, depth | Timed out or missing bytes are positive |
 | `dhcp` | Server, MAC, hostname, requested/assigned address, message types | Lease time, duration | Assigned address is empty |
 | `notice` | Note, protocol, message | `n` | Every notice |
 | `analyzer` | Analyzer kind/name, failure reason | None | Failure reason is non-empty |
 | `dce_rpc` | Named pipe, endpoint, operation | RTT | Never |
 | `smb_mapping` | Path, service, share type | None | Never |
 | `ntlm` | Username, hostname, domain | None | `success` is `F` |
+| `ssh` | Client, server, authentication success, direction | Authentication attempts | `auth_success` is `F` |
 | `weird` | Name, detail | None | Every weird record |
 | `known_hosts` | None | None | Never |
 | `known_services` | Port, transport, service | None | Never |
@@ -571,10 +595,19 @@ $$
 B = \min(B_{\max},\max(0,P-1)B_{\mathrm{step}}).
 $$
 
-Defaults are `B_step = 0.15` and `B_max = 0.30`. The global score is:
+Defaults are `B_step = 0.15` and `B_max = 0.30`. Let (U) be the number of
+exact responsible UIDs present in at least two anomalous components. Its bonus
+is:
 
 $$
-G = \min\left(1,\sum_{p=1}^{P}c_p+B\right).
+B_U = \min(B_{U,\max}, U B_{U,\mathrm{step}}).
+$$
+
+The defaults are `0.10` per shared UID and a `0.20` cap. Shared FUIDs are
+reported but not scored. The global score is:
+
+$$
+G = \min\left(1,\sum_{p=1}^{P}c_p+B+B_U\right).
 $$
 
 Sensitivity changes both global gates:
@@ -752,6 +785,7 @@ run. The dashboard displays and snapshots those effective configured values.
 | ------- | ------: | ---------- |
 | `training_hours` | `3` | Legacy key: number of observed windows assumed benign for each independent model; zero selects adaptive cold start |
 | `window_seconds` | `3600` | Width of every aggregation window; `300` selects five-minute windows |
+| `normal_dirs` | empty | Comma-separated known-normal Zeek folders fitted before the selected input |
 | `sensitivity` | `1.0` | Divisor applied to anomaly thresholds and global protocol-count gate |
 | `color` | `auto` | `auto`, `always`, or `never` terminal ANSI colors; does not affect detection |
 | `show_terminal_data` | `true` | Prints window-level `DATA` rows; logs are written regardless |
@@ -783,6 +817,8 @@ run. The dashboard displays and snapshots those effective configured values.
 | `minimum_protocols` | `2` | \(P_{\min}\), corroborating protocol-count gate before sensitivity |
 | `corroboration_bonus` | `0.15` | \(B_{\mathrm{step}}\), bonus per additional anomalous protocol |
 | `corroboration_bonus_cap` | `0.30` | \(B_{\max}\), maximum corroboration bonus |
+| `uid_corroboration_bonus` | `0.10` | \(B_{U,\mathrm{step}}\), bonus per exact UID shared by anomalous components |
+| `uid_corroboration_bonus_cap` | `0.20` | \(B_{U,\max}\), maximum exact-UID bonus |
 | `max_responsible_flows` | `10` | Maximum representative Zeek records embedded in each protocol or global anomaly |
 | `output_dir` | `multi_protocol_ad_output` | Destination directory; does not affect detection |
 
