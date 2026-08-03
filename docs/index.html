@@ -187,7 +187,7 @@
       <a href="#training">5. Learning normal</a>
       <a href="#scoring">6. Anomaly scoring</a>
       <a href="#special">7. Specialized techniques</a>
-      <a href="#adaptation">8. Safe adaptation</a>
+      <a href="#adaptation">8. Model and adaptation</a>
       <a href="#ensemble">9. Global ensemble</a>
       <a href="#attribution">10. Explaining alerts</a>
       <a href="#walkthrough">11. Full example</a>
@@ -388,14 +388,67 @@
       </section>
 
       <section id="adaptation">
-        <h2>8. The baseline continues to adapt</h2>
-        <p>Real networks change. After scoring a window, the detector updates the model with an exponentially weighted moving average (EWMA):</p>
-        <div class="formula">new_mean = old_mean + alpha × (current_value − old_mean)</div>
-        <div class="grid-2">
-          <div class="card"><h3>Small deviation</h3><p>Uses <code>drift_alpha</code>, normally 0.05. The baseline follows gradual legitimate changes.</p></div>
-          <div class="card"><h3>Suspicious deviation</h3><p>Uses <code>suspicious_alpha</code>, normally 0.005. The suspicious observation influences the model ten times more slowly, reducing baseline poisoning.</p></div>
+        <h2>8. What is the model, and exactly when does it adapt?</h2>
+
+        <h3>The detection model is an online statistical model</h3>
+        <p>This is <strong>not a supervised attack classifier</strong> and it is not trained with malware labels. It is an unsupervised, online statistical detector. Every numeric feature has an independent <code>AdaptiveStats</code> model for one source-IP/protocol pair or one target IP. For example, the DNS <code>flow_count</code> of <code>10.0.0.25</code> has a different model from that IP's DNS <code>failure_ratio</code>, and both are separate from every other IP.</p>
+        <div class="grid-3">
+          <div class="card"><h3>Fixed feature logic</h3><p>Code converts Zeek records into understandable values such as counts, ratios, entropy, bytes, new peers, and authentication attempts.</p></div>
+          <div class="card"><h3>Learned statistics</h3><p>Each feature model retains count, mean, variance, up to 256 recent transformed values, up to 64 residuals, a noise floor, and a threshold.</p></div>
+          <div class="card"><h3>Statistical decision</h3><p>The current feature becomes unusual when its robust distance from its own history reaches the sensitivity-adjusted threshold.</p></div>
         </div>
-        <p>The current observation is always scored against the model that existed <em>before</em> that observation. Adaptation happens only after the decision.</p>
+        <div class="callout"><strong>Why this type of model?</strong> Network captures normally have no reliable labels saying “attack” or “benign,” and normal volume differs greatly between devices. Per-IP statistical models learn each device without labeled data, run incrementally with little memory, and produce a concrete feature value, baseline, z-score, and threshold that a human can audit. The trade-off is important: the model detects <em>deviation from learned behavior</em>, not malicious intent by itself.</div>
+
+        <h3>Detection and adaptation are two separate decisions</h3>
+        <p>First, every feature is scored using the model as it existed before the current window. Feature thresholds decide which values become anomaly reasons. Only after all reasons are known does the detector choose an adaptation speed using the <strong>sum of anomalous z-scores</strong>.</p>
+        <div class="formula">feature decision: z ≥ feature_threshold / sensitivity → add one reason<br>protocol score A = Σ z of reasons that crossed their thresholds<br>adaptation decision: A ≤ adaptation_score → drift update; otherwise → suspicious update</div>
+        <div class="callout warn"><strong>Do not confuse the thresholds.</strong> The feature threshold decides whether an anomaly reason exists. <code>adaptation_score</code>, normally 8, does not create an alert; it decides how quickly the completed window is learned. The global ensemble threshold is later still and does not control feature-model adaptation.</div>
+
+        <h3>Exact adaptation conditions</h3>
+        <div class="table-wrap"><table>
+          <thead><tr><th>Situation</th><th>Can it emit a statistical anomaly?</th><th>How the model changes</th><th>Why</th></tr></thead>
+          <tbody>
+            <tr><td><strong>External known-normal folders</strong><br><code>normal_dirs</code></td><td>No. Detection output is suppressed.</td><td>Every observed window uses Welford <code>fit</code>. Thresholds are calibrated after all external baseline folders are fitted.</td><td>The user explicitly declared this traffic normal.</td></tr>
+            <tr><td><strong>Explicit training</strong><br><code>trained_windows &lt; training_hours</code></td><td>No. Reasons are suppressed even if a provisional z-score is large.</td><td>Every feature uses Welford <code>fit</code>; the window is recorded as <code>training_fit</code>.</td><td>Build an unbiased initial estimate from the assumed-benign prefix.</td></tr>
+            <tr><td><strong>No explicit training and insufficient history</strong><br><code>training_hours = 0</code> and <code>count &lt; minimum_points</code></td><td>No statistical reason: z-score is forced to zero.</td><td>The first value initializes the model. Later values use <code>drift_alpha</code>; mode is <code>drift_update</code>.</td><td>A distance cannot be trusted until enough prior observations exist.</td></tr>
+            <tr><td><strong>Detection with no anomaly reasons</strong><br><code>A = 0</code></td><td>No.</td><td>Every feature in the window uses EWMA with <code>drift_alpha</code>, normally 0.05.</td><td>Normal behavior should gradually follow legitimate operational change.</td></tr>
+            <tr><td><strong>Detection with a small anomaly</strong><br><code>0 &lt; A ≤ adaptation_score</code></td><td>Yes. An anomaly event is emitted.</td><td>Every feature in that IP/protocol window still uses <code>drift_alpha</code>.</td><td>A weak alert may be harmless drift; the detector learns it at the ordinary rate.</td></tr>
+            <tr><td><strong>Detection with a strong anomaly</strong><br><code>A &gt; adaptation_score</code></td><td>Yes. An anomaly event is emitted.</td><td>Every feature in that window uses <code>suspicious_alpha</code>, normally 0.005; mode is <code>suspicious_update</code>.</td><td>The model does not freeze, but suspicious behavior changes its mean/variance much more slowly, reducing baseline poisoning.</td></tr>
+          </tbody>
+        </table></div>
+        <p>The adaptation rate is selected from the <strong>total protocol-window score</strong>, not separately for each feature. If one or more reasons push the sum above <code>adaptation_score</code>, all feature models in that source-IP/protocol window receive the slow suspicious update. Target-IP models use the same rule.</p>
+
+        <h3>How training adaptation works: equal-weight Welford fitting</h3>
+        <p>During trusted training, all fitted windows have equal weight. If the old model contains <code>n</code> values, Welford adds the new transformed value <code>y</code> exactly:</p>
+        <div class="formula">n_new = n + 1<br>delta = y − mean_old<br>mean_new = mean_old + delta / n_new<br>M2_new = M2_old + delta × (y − mean_new)<br>variance_new = M2_new / max(1, n_new − 1)</div>
+        <p>This produces the ordinary sample mean and variance without loading the complete dataset into memory. Training values are also retained for empirical threshold calibration. With fewer than ten benign training values, calibration is not considered stable enough and the configured fallback threshold is used.</p>
+
+        <h3>How detection adaptation works: recency-weighted EWMA</h3>
+        <p>After training—or immediately when training is zero—the mean and variance use exponentially weighted updates. Recent behavior matters more than old behavior:</p>
+        <div class="formula">delta = y − mean_old<br>mean_new = mean_old + alpha × delta<br>variance_new = (1 − alpha) × (variance_old + alpha × delta²)</div>
+        <div class="grid-2">
+          <div class="card"><h3>Ordinary drift</h3><p><code>alpha = drift_alpha = 0.05</code> by default. Five percent of the current residual moves the mean into the new observation's direction.</p></div>
+          <div class="card"><h3>Strong anomaly</h3><p><code>alpha = suspicious_alpha = 0.005</code> by default. Only 0.5 percent of the residual moves the mean, ten times less than ordinary drift.</p></div>
+        </div>
+        <div class="callout good"><strong>Numeric example:</strong> suppose the transformed mean is 2.4 and the current transformed value is 3.9, so <code>delta = 1.5</code>. Ordinary adaptation gives <code>2.4 + 0.05 × 1.5 = 2.475</code>. Strong-anomaly adaptation gives <code>2.4 + 0.005 × 1.5 = 2.4075</code>. The anomalous value is not ignored, but it moves the suspicious baseline only 0.0075 instead of 0.075.</div>
+
+        <h3>What else changes after every observation?</h3>
+        <div class="table-wrap"><table>
+          <thead><tr><th>Model state</th><th>Adaptation behavior</th><th>Protection or consequence</th></tr></thead>
+          <tbody>
+            <tr><td>EWMA mean and variance</td><td>Use the selected drift or suspicious alpha.</td><td>Strong anomalies affect these statistics slowly.</td></tr>
+            <tr><td>Recent transformed-value buffer</td><td>The current value is appended; only the most recent 256 are retained.</td><td>Median/MAD resist a few outliers, but persistent changed behavior eventually becomes the new baseline.</td></tr>
+            <tr><td>Residual/noise-floor buffer</td><td>The latest absolute residual is appended; only 64 are retained. After five residuals, the floor itself moves with a 0.05 EWMA.</td><td>Normal measurement jitter does not create enormous z-scores when MAD or variance is near zero.</td></tr>
+            <tr><td>Empirical threshold</td><td>Calibrated once after trusted training; not continuously recalibrated during detection.</td><td>The decision boundary does not silently chase anomalous detection traffic.</td></tr>
+            <tr><td>Known peers and categorical values</td><td>First-seen values are added to known-state sets when observed, including during detection.</td><td>A value is “new” on first observation, not forever. Repeated novelty must appear through count/ratio deviations or other features.</td></tr>
+          </tbody>
+        </table></div>
+
+        <h3>Special case: TLS per-server byte models</h3>
+        <p>TLS also maintains a byte-volume model for each known server. Before SSL training completes, matching byte values use Welford fitting. During detection, a TLS flow with no reasons uses <code>ssl_baseline_alpha</code>; a flow with at most <code>ssl_max_small_anomalies</code> reasons uses <code>drift_alpha</code>; a flow with more reasons uses <code>suspicious_alpha</code>. This per-flow byte update is separate from the SSL protocol-window adaptation described above.</p>
+
+        <div class="callout warn"><strong>Why adapt anomalous traffic at all?</strong> Freezing forever after an alert would make a legitimate permanent change alert forever. Learning every alert quickly would let repeated attacks poison the baseline. The design takes the middle path: always remain adaptive, use robust median/MAD to tolerate isolated outliers, and slow the mean/variance update when the aggregate evidence is strong.</div>
+        <p>The current observation is always scored against the model that existed <em>before</em> that observation. Alert emission comes first; adaptation happens afterward.</p>
       </section>
 
       <section id="ensemble">
