@@ -1,0 +1,470 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="A technical, step-by-step explanation of the Zeek multi-protocol anomaly detector.">
+  <title>How the Zeek Anomaly Detector Works</title>
+  <style>
+    :root {
+      --ink: #172033;
+      --muted: #58657a;
+      --paper: #f6f8fb;
+      --card: #ffffff;
+      --line: #dbe2ec;
+      --blue: #1463ff;
+      --blue-soft: #eaf1ff;
+      --green: #087f5b;
+      --green-soft: #e6f7f1;
+      --amber: #9a5b00;
+      --amber-soft: #fff3d6;
+      --red: #c92a2a;
+      --red-soft: #fff0f0;
+      --violet: #7048e8;
+      --violet-soft: #f0ecff;
+      --code: #111827;
+      --radius: 14px;
+      --shadow: 0 10px 30px rgba(29, 45, 76, 0.08);
+    }
+
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body {
+      margin: 0;
+      color: var(--ink);
+      background: var(--paper);
+      font: 16px/1.65 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+    a { color: var(--blue); }
+    code, pre, .formula {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    }
+    code {
+      padding: 0.12rem 0.35rem;
+      border-radius: 5px;
+      background: #edf1f6;
+      font-size: 0.9em;
+    }
+    pre {
+      margin: 1rem 0;
+      padding: 1rem 1.1rem;
+      overflow-x: auto;
+      border-radius: 10px;
+      color: #e5edf8;
+      background: var(--code);
+      font-size: 0.88rem;
+      line-height: 1.55;
+    }
+    h1, h2, h3 { line-height: 1.2; letter-spacing: -0.02em; }
+    h1 { max-width: 840px; margin: 0; font-size: clamp(2.2rem, 5vw, 4.2rem); }
+    h2 { margin: 0 0 1rem; font-size: clamp(1.65rem, 3vw, 2.35rem); }
+    h3 { margin: 1.4rem 0 0.55rem; font-size: 1.18rem; }
+    p { margin: 0.7rem 0; }
+    strong { color: #0d1628; }
+
+    .hero {
+      padding: 5rem max(5vw, 1.25rem) 4rem;
+      color: white;
+      background:
+        radial-gradient(circle at 85% 10%, rgba(91, 151, 255, 0.45), transparent 28rem),
+        linear-gradient(135deg, #0c1c3c, #173f82);
+    }
+    .hero .eyebrow { color: #a9c8ff; font-weight: 750; letter-spacing: 0.08em; text-transform: uppercase; }
+    .hero p { max-width: 760px; margin-top: 1.3rem; color: #dce8ff; font-size: 1.14rem; }
+    .hero code { color: white; background: rgba(255,255,255,0.14); }
+    .hero-links { display: flex; flex-wrap: wrap; gap: 0.7rem; margin-top: 1.7rem; }
+    .hero-links a {
+      padding: 0.55rem 0.85rem;
+      border: 1px solid rgba(255,255,255,0.28);
+      border-radius: 9px;
+      color: white;
+      text-decoration: none;
+      background: rgba(255,255,255,0.08);
+    }
+
+    .layout { display: grid; grid-template-columns: 240px minmax(0, 980px); gap: 3rem; max-width: 1320px; margin: 0 auto; padding: 2.5rem 1.25rem 6rem; }
+    nav { position: sticky; top: 1rem; align-self: start; padding: 1rem; border: 1px solid var(--line); border-radius: var(--radius); background: var(--card); box-shadow: var(--shadow); }
+    nav strong { display: block; margin: 0.15rem 0 0.65rem; }
+    nav a { display: block; padding: 0.35rem 0.45rem; border-radius: 6px; color: var(--muted); text-decoration: none; font-size: 0.91rem; }
+    nav a:hover { color: var(--blue); background: var(--blue-soft); }
+    main { min-width: 0; }
+    section { margin: 0 0 4rem; scroll-margin-top: 1rem; }
+
+    .lead { color: var(--muted); font-size: 1.08rem; }
+    .callout { margin: 1.2rem 0; padding: 1rem 1.1rem; border-left: 4px solid var(--blue); border-radius: 0 10px 10px 0; background: var(--blue-soft); }
+    .callout.warn { border-color: var(--amber); background: var(--amber-soft); }
+    .callout.good { border-color: var(--green); background: var(--green-soft); }
+
+    .pipeline { display: grid; grid-template-columns: repeat(4, 1fr); gap: 0.8rem; margin: 1.5rem 0; }
+    .step { position: relative; min-height: 145px; padding: 1rem; border: 1px solid var(--line); border-radius: var(--radius); background: var(--card); box-shadow: var(--shadow); }
+    .step:not(:last-child)::after { content: "→"; position: absolute; z-index: 2; top: 50%; right: -1.05rem; color: var(--blue); font-size: 1.35rem; font-weight: 800; }
+    .step-num { display: inline-grid; place-items: center; width: 1.75rem; height: 1.75rem; border-radius: 50%; color: white; background: var(--blue); font-size: 0.8rem; font-weight: 800; }
+    .step h3 { margin: 0.7rem 0 0.35rem; }
+    .step p { margin: 0; color: var(--muted); font-size: 0.9rem; }
+
+    .grid-2, .grid-3 { display: grid; gap: 1rem; }
+    .grid-2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .grid-3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+    .card { padding: 1.1rem; border: 1px solid var(--line); border-radius: var(--radius); background: var(--card); box-shadow: var(--shadow); }
+    .card h3 { margin-top: 0; }
+    .tag { display: inline-block; margin: 0 0.25rem 0.3rem 0; padding: 0.15rem 0.45rem; border-radius: 999px; color: #174281; background: var(--blue-soft); font: 700 0.75rem/1.5 ui-monospace, monospace; }
+
+    table { width: 100%; margin: 1rem 0; border-collapse: collapse; border: 1px solid var(--line); background: var(--card); font-size: 0.91rem; }
+    th, td { padding: 0.72rem 0.8rem; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; }
+    th { color: #25344d; background: #edf2f8; }
+    tr:last-child td { border-bottom: 0; }
+    .table-wrap { overflow-x: auto; }
+
+    .formula { margin: 1rem 0; padding: 0.85rem 1rem; border: 1px solid #ccd8ec; border-radius: 9px; color: #123971; background: #f3f7ff; overflow-x: auto; }
+    .decision { display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; gap: 1rem; margin: 1.2rem 0; }
+    .decision .node { padding: 1rem; border: 2px solid var(--violet); border-radius: 12px; text-align: center; background: var(--violet-soft); }
+    .decision .yes { border-color: var(--red); background: var(--red-soft); }
+    .decision .arrow { color: var(--muted); font-weight: 800; }
+
+    .calculator { padding: 1.2rem; border: 1px solid #bfd0f0; border-radius: var(--radius); background: linear-gradient(145deg, white, #f1f6ff); box-shadow: var(--shadow); }
+    .calc-grid { display: grid; grid-template-columns: repeat(4, minmax(110px, 1fr)); gap: 0.8rem; }
+    label { display: block; color: var(--muted); font-size: 0.82rem; font-weight: 700; }
+    input { width: 100%; margin-top: 0.25rem; padding: 0.62rem; border: 1px solid #bdc9da; border-radius: 7px; color: var(--ink); background: white; font: inherit; }
+    .calc-output { margin-top: 1rem; padding: 1rem; border-radius: 10px; background: var(--code); color: #e5edf8; }
+    .calc-output strong { color: #8eb8ff; }
+    .verdict { display: inline-block; margin-left: 0.4rem; padding: 0.15rem 0.5rem; border-radius: 999px; font-weight: 800; }
+    .verdict.anomaly { color: #7f1d1d; background: #fecaca; }
+    .verdict.normal { color: #064e3b; background: #a7f3d0; }
+
+    .example-flow { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; }
+    .phase { padding: 1rem; border-top: 4px solid var(--blue); border-radius: 8px; background: white; box-shadow: var(--shadow); }
+    .phase.alert { border-color: var(--red); }
+    .footer { padding: 2rem 1.25rem; color: #c6d5ec; text-align: center; background: #0c1c3c; }
+
+    @media (max-width: 980px) {
+      .layout { grid-template-columns: 1fr; }
+      nav { position: static; columns: 2; }
+      nav strong { column-span: all; }
+      .pipeline { grid-template-columns: repeat(2, 1fr); }
+      .step:nth-child(2)::after { display: none; }
+      .calc-grid { grid-template-columns: repeat(2, 1fr); }
+    }
+    @media (max-width: 640px) {
+      .hero { padding-top: 3rem; }
+      nav { columns: 1; }
+      .pipeline, .grid-2, .grid-3, .example-flow, .decision { grid-template-columns: 1fr; }
+      .step::after, .decision .arrow { display: none; }
+      .calc-grid { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+  <header class="hero">
+    <div class="eyebrow">AnomalyDetectionProfiles · Learning guide</div>
+    <h1>How does the Zeek anomaly detector decide that traffic is unusual?</h1>
+    <p>This page follows one record through the complete detector. It explains what is measured, how normal behavior is learned, how anomaly scores are calculated, and why a final alert is emitted.</p>
+    <div class="hero-links">
+      <a href="#overview">Start with the pipeline</a>
+      <a href="#features">See feature examples</a>
+      <a href="#scoring">Try the score calculator</a>
+      <a href="#walkthrough">Read a full example</a>
+    </div>
+  </header>
+
+  <div class="layout">
+    <nav aria-label="Page contents">
+      <strong>On this page</strong>
+      <a href="#overview">1. Complete pipeline</a>
+      <a href="#input">2. Input and correlation</a>
+      <a href="#windows">3. Time windows</a>
+      <a href="#features">4. Feature extraction</a>
+      <a href="#training">5. Learning normal</a>
+      <a href="#scoring">6. Anomaly scoring</a>
+      <a href="#special">7. Specialized techniques</a>
+      <a href="#adaptation">8. Safe adaptation</a>
+      <a href="#ensemble">9. Global ensemble</a>
+      <a href="#attribution">10. Explaining alerts</a>
+      <a href="#walkthrough">11. Full example</a>
+      <a href="#settings">12. Important settings</a>
+    </nav>
+
+    <main>
+      <section id="overview">
+        <h2>1. The complete pipeline</h2>
+        <p class="lead">The detector does not ask whether one packet matches a malicious signature. It asks whether the current behavior of an IP is sufficiently different from that IP's learned history.</p>
+        <div class="pipeline">
+          <div class="step"><span class="step-num">1</span><h3>Read</h3><p>Parse the Zeek logs that are present. Missing TLS, SSH, or other logs do not stop the run.</p></div>
+          <div class="step"><span class="step-num">2</span><h3>Group</h3><p>Place records into source-IP/protocol/time-window buckets and target-IP buckets.</p></div>
+          <div class="step"><span class="step-num">3</span><h3>Measure</h3><p>Convert records into counts, ratios, novelty values, lexical signals, and transfer statistics.</p></div>
+          <div class="step"><span class="step-num">4</span><h3>Compare</h3><p>Compare every current feature with its own adaptive historical model.</p></div>
+          <div class="step"><span class="step-num">5</span><h3>Decide</h3><p>A feature becomes a reason when its z-score reaches the effective threshold.</p></div>
+          <div class="step"><span class="step-num">6</span><h3>Attribute</h3><p>Select the exact Zeek records, UIDs, and FUIDs that best explain each reason.</p></div>
+          <div class="step"><span class="step-num">7</span><h3>Combine</h3><p>Combine anomalous protocol and target components into one global IP score.</p></div>
+          <div class="step"><span class="step-num">8</span><h3>Adapt</h3><p>Update the model quickly for small drift and slowly for suspicious behavior.</p></div>
+        </div>
+        <div class="callout good"><strong>Key idea:</strong> feature definitions are fixed and understandable, but their normal values are learned separately for each IP and protocol. A high DNS count can be normal for a resolver and anomalous for a workstation.</div>
+      </section>
+
+      <section id="input">
+        <h2>2. Input logs and cross-log correlation</h2>
+        <p>The input is a folder containing Zeek TSV or JSON logs. The detector uses every supported, IP-attributable log that exists, including <code>conn</code>, <code>dns</code>, <code>http</code>, <code>files</code>, <code>ssh</code>, <code>ssl</code>, <code>dhcp</code>, <code>ntlm</code>, <code>smb_mapping</code>, <code>notice</code>, and <code>weird</code>.</p>
+        <div class="grid-2">
+          <div class="card">
+            <h3>UID correlation</h3>
+            <p>Zeek uses the same connection <code>uid</code> across logs. If <code>C8abc</code> appears in connection, HTTP, file, and weird records, the detector attaches that protocol context to the flows. The same responsible UID in multiple anomalous components is stronger evidence than unrelated events.</p>
+          </div>
+          <div class="card">
+            <h3>FUID correlation</h3>
+            <p>HTTP fields such as <code>resp_fuids</code> can point to a <code>files.log</code> record. The detector enriches HTTP behavior with the exact linked file's byte count and MIME type. Shared FUIDs are reported as evidence but do not add ensemble score.</p>
+          </div>
+        </div>
+        <pre>{
+  "uid": "C8abc",
+  "id.orig_h": "10.0.0.25",
+  "id.resp_h": "203.0.113.8",
+  "resp_fuids": ["F4xyz"],
+  "uri": "/download/update.bin"
+}</pre>
+        <div class="callout warn"><strong>No TLS is required.</strong> If <code>ssl.log</code> is absent, only TLS-specific features and flow alerts disappear. DNS, connection, SSH, HTTP, file, target-IP, and global detection still work.</div>
+      </section>
+
+      <section id="windows">
+        <h2>3. Records become time windows</h2>
+        <p>Statistical detection needs repeated comparable observations. The detector therefore aggregates traffic into windows of <code>window_seconds</code>.</p>
+        <div class="formula">window_start = floor(Zeek timestamp / window_seconds) × window_seconds</div>
+        <p>With a 300-second window, timestamps 0–299 belong to the first window, 300–599 to the second, and so on. For source-side behavior, each model is keyed by:</p>
+        <div class="formula">(source IP, protocol, window)</div>
+        <p>A second detector view groups incoming behavior by target IP. This catches changes such as many sources or ports suddenly contacting one destination.</p>
+        <div class="grid-3">
+          <div class="card"><h3>One hour</h3><p><code>window_seconds = 3600</code><br>At most one observation per continuously active IP/protocol model.</p></div>
+          <div class="card"><h3>Five minutes</h3><p><code>window_seconds = 300</code><br>At most twelve observations during one hour.</p></div>
+          <div class="card"><h3>Sparse traffic</h3><p>Empty windows are not invented. A model advances only when that IP/protocol has records.</p></div>
+        </div>
+        <p>Smaller windows help short captures produce enough observations, but they also make each observation noisier. The baseline and analyzed traffic must use the same window size.</p>
+      </section>
+
+      <section id="features">
+        <h2>4. Feature extraction: what is measured?</h2>
+        <p>A feature is one numeric summary of a window. Each feature gets its own statistical model. Categorical values also produce <code>unique_*</code> and <code>new_*</code> counts.</p>
+
+        <h3>Common behavioral features</h3>
+        <div class="table-wrap"><table>
+          <thead><tr><th>Feature</th><th>Meaning</th><th>Example</th></tr></thead>
+          <tbody>
+            <tr><td><code>flow_count</code></td><td>Records from one source IP in one protocol window.</td><td>47 DNS requests in five minutes.</td></tr>
+            <tr><td><code>unique_peers</code></td><td>Distinct destination IPs in the window.</td><td>A client contacted 18 servers.</td></tr>
+            <tr><td><code>new_peers</code></td><td>Destinations never previously seen by this source/protocol model.</td><td>Four first-seen servers.</td></tr>
+            <tr><td><code>failure_ratio</code></td><td>Failed records divided by all records.</td><td>8 failures / 10 flows = 0.8.</td></tr>
+            <tr><td><code>unique_F</code></td><td>Distinct values of categorical field F this window.</td><td>Six distinct DNS response codes.</td></tr>
+            <tr><td><code>new_F</code></td><td>Values of F absent from this model's previous history.</td><td>Two new HTTP user agents.</td></tr>
+            <tr><td><code>total_N</code>, <code>avg_N</code></td><td>Total and average of numeric field N.</td><td>Total response bytes and average duration.</td></tr>
+          </tbody>
+        </table></div>
+
+        <h3>Protocol-specific feature examples</h3>
+        <div class="grid-2">
+          <div class="card">
+            <h3>Connections</h3>
+            <span class="tag">max_ports_per_destination</span><span class="tag">failed_scan_ratio</span><span class="tag">scan_history_ratio</span><span class="tag">zero_payload_ratio</span><span class="tag">total_packets</span><span class="tag">bytes_per_second</span>
+            <p>A vertical scan produces many distinct ports for one destination, often with failed states, scan-like history, short duration, and no payload.</p>
+          </div>
+          <div class="card">
+            <h3>DNS</h3>
+            <span class="tag">query_entropy</span><span class="tag">first_label_length</span><span class="tag">dga_like_ratio</span><span class="tag">unique_tlds</span><span class="tag">no_answer_ratio</span><span class="tag">rejected_ratio</span>
+            <p>Random-looking, long labels with unusual answer behavior can indicate generated domains, but their window values must still deviate from the learned baseline.</p>
+          </div>
+          <div class="card">
+            <h3>HTTP and files</h3>
+            <span class="tag">unique_uris</span><span class="tag">max_uri_length</span><span class="tag">linked_file_bytes</span><span class="tag">unique_linked_file_mimes</span><span class="tag">byte_gap</span>
+            <p>HTTP behavior is enriched from exact FUID-linked file records. File byte gaps compare declared total bytes with observed bytes.</p>
+          </div>
+          <div class="card">
+            <h3>SSH</h3>
+            <span class="tag">auth_attempts</span><span class="tag">auth_success</span><span class="tag">client</span><span class="tag">server</span><span class="tag">direction</span>
+            <p>A sudden increase in attempts, failures, or new client/server software becomes unusual relative to the source's previous SSH windows.</p>
+          </div>
+          <div class="card">
+            <h3>TLS / SSL</h3>
+            <span class="tag">unique_servers</span><span class="tag">new_servers</span><span class="tag">ja3_changes</span><span class="tag">known_server_avg_bytes</span><span class="tag">new_ja3s</span>
+            <p>TLS has both window features and specialized flow evidence for new servers, new server fingerprints, and unusual bytes to a known server.</p>
+          </div>
+          <div class="card">
+            <h3>Target IP</h3>
+            <span class="tag">incoming_flow_count</span><span class="tag">unique_sources</span><span class="tag">new_sources</span><span class="tag">unique_ports</span><span class="tag">unique_protocols</span>
+            <p>This independent view finds destinations receiving unexpectedly broad or intense incoming activity.</p>
+          </div>
+        </div>
+      </section>
+
+      <section id="training">
+        <h2>5. Learning normal behavior</h2>
+        <p>Normal is learned independently for every feature of every IP/protocol model. During explicit training, the first <code>training_hours</code> observed windows are assumed benign. The name is retained for compatibility: it counts windows, not literal hours when the configured window is smaller than 3600 seconds.</p>
+
+        <h3>Welford training</h3>
+        <p>Welford's online algorithm updates the count, mean, and variance one observation at a time. It avoids storing the complete capture and is numerically stable.</p>
+        <div class="formula">count ← count + 1<br>delta ← value − old_mean<br>mean ← old_mean + delta / count<br>M2 ← M2 + delta × (value − new_mean)</div>
+
+        <h3>Three ways to start</h3>
+        <div class="grid-3">
+          <div class="card"><h3>Benign prefix</h3><p><code>training_hours &gt; 0</code>. The first N active windows of each model are fitted and cannot alert.</p></div>
+          <div class="card"><h3>External baseline</h3><p><code>normal_dirs</code>. Trusted folders are fitted silently before the selected capture. They must contain the same IP identities to train those exact models.</p></div>
+          <div class="card"><h3>Cold start</h3><p><code>training_hours = 0</code>. Early windows adapt the model, but statistical z-scores remain zero until <code>minimum_points</code> observations exist.</p></div>
+        </div>
+        <div class="callout warn"><strong>Zero training is not baseline-free detection.</strong> If <code>minimum_points = 8</code>, windows 1–8 seed the model and window 9 is the first statistically eligible window. Specialized TLS novelty can alert immediately in zero-training mode because it uses first-seen state rather than a statistical z-score.</div>
+      </section>
+
+      <section id="scoring">
+        <h2>6. How a feature becomes anomalous</h2>
+        <h3>Step A — compress heavy-tailed values</h3>
+        <p>Counts and byte values can span several orders of magnitude. Every non-negative feature is compressed before modeling:</p>
+        <div class="formula">y = ln(1 + max(0, raw_feature_value))</div>
+        <p>This makes multiplicative changes easier to compare and prevents one enormous transfer from dominating the model.</p>
+
+        <h3>Step B — measure distance from normal</h3>
+        <p>When fewer than seven historical values are retained, the detector uses distance from the mean divided by the larger of standard deviation or the learned noise floor. With seven or more values, it uses the median and median absolute deviation (MAD), which are more resistant to outliers.</p>
+        <div class="formula">robust_std = max(1.4826 × MAD, minimum_noise_floor)<br>z = |current_transformed_value − historical_median| / robust_std</div>
+
+        <h3>Step C — compare with the effective threshold</h3>
+        <p>After at least ten benign training values, the detector can calibrate the threshold from the configured benign quantile. Otherwise, it uses the configured fallback threshold.</p>
+        <div class="formula">effective_threshold = learned_or_fallback_threshold / sensitivity</div>
+        <div class="decision">
+          <div class="node"><strong>z &lt; threshold</strong><br>no anomaly reason</div>
+          <div class="arrow">or</div>
+          <div class="node yes"><strong>z ≥ threshold</strong><br>feature becomes an anomaly reason</div>
+        </div>
+
+        <h3>Try a transformed-space score</h3>
+        <p>This calculator shows the exact robust comparison. Values are in transformed space, after <code>ln(1+x)</code>.</p>
+        <div class="calculator">
+          <div class="calc-grid">
+            <label>Current transformed value<input id="current" type="number" step="0.01" value="3.93"></label>
+            <label>Historical median<input id="median" type="number" step="0.01" value="2.40"></label>
+            <label>Historical MAD<input id="mad" type="number" step="0.01" value="0.087"></label>
+            <label>Noise floor<input id="floor" type="number" min="0.001" step="0.01" value="0.10"></label>
+            <label>Base threshold<input id="threshold" type="number" min="0.01" step="0.1" value="3.5"></label>
+            <label>Sensitivity<input id="sensitivity" type="number" min="0.01" step="0.1" value="1.0"></label>
+          </div>
+          <div id="calcResult" class="calc-output" aria-live="polite"></div>
+        </div>
+
+        <div class="callout"><strong>Direction is explanatory, not a different formula.</strong> The detector reports whether the raw value is higher or lower than its learned mean. The z-score itself is absolute, so sufficiently unusual decreases can also alert.</div>
+      </section>
+
+      <section id="special">
+        <h2>7. Specialized detection techniques</h2>
+        <h3>Connection scan shape</h3>
+        <p>Instead of declaring “more than N ports is always a scan,” the detector measures scan-like structure per window. Examples are port fan-out to one destination, failed connection states, scan-like Zeek history, short connections, and zero payload. Their values are then compared with that source's learned connection behavior.</p>
+
+        <h3>DNS lexical and DGA-like behavior</h3>
+        <p>The first DNS label is measured using length, Shannon entropy, unique-character ratio, vowel ratio, and digit ratio. A query is marked DGA-like when the first label is at least 8 characters, entropy is at least 2.8, unique-character ratio is at least 0.55, and either vowel ratio is at most 0.45 or digit ratio is at least 0.10.</p>
+        <div class="formula">DGA-like record → contributes to dga_like_count and dga_like_ratio → window value is statistically modeled</div>
+        <p>This predicate does <strong>not</strong> directly emit an alert. It creates explainable window features. mDNS on port 5353, <code>.local</code>, reverse lookups, and DNS service discovery are excluded from the DGA-like count.</p>
+
+        <h3>TLS flow evidence</h3>
+        <p>TLS additionally tracks state per source: known servers, JA3/JA3S fingerprints, and byte models for known servers. After training, a first-seen server or JA3S can create a flow alert. Unusual bytes to a known server require enough prior points for that server model. Flow alerts explain individual TLS behavior but do not vote directly in the global ensemble.</p>
+
+        <h3>Exact cross-log evidence</h3>
+        <p>UID and FUID correlation is deterministic, not statistical. It connects evidence known to belong to the same Zeek connection or file. Statistical models decide whether the associated window features are unusual; exact identifiers then strengthen and explain the relationship.</p>
+      </section>
+
+      <section id="adaptation">
+        <h2>8. The baseline continues to adapt</h2>
+        <p>Real networks change. After scoring a window, the detector updates the model with an exponentially weighted moving average (EWMA):</p>
+        <div class="formula">new_mean = old_mean + alpha × (current_value − old_mean)</div>
+        <div class="grid-2">
+          <div class="card"><h3>Small deviation</h3><p>Uses <code>drift_alpha</code>, normally 0.05. The baseline follows gradual legitimate changes.</p></div>
+          <div class="card"><h3>Suspicious deviation</h3><p>Uses <code>suspicious_alpha</code>, normally 0.005. The suspicious observation influences the model ten times more slowly, reducing baseline poisoning.</p></div>
+        </div>
+        <p>The current observation is always scored against the model that existed <em>before</em> that observation. Adaptation happens only after the decision.</p>
+      </section>
+
+      <section id="ensemble">
+        <h2>9. From feature reasons to a global IP anomaly</h2>
+        <h3>Protocol score</h3>
+        <p>Every feature whose z-score crosses its threshold becomes a reason. A protocol-window anomaly score is the sum of those reason z-scores:</p>
+        <div class="formula">protocol_score = Σ anomalous_feature_zscores<br>protocol_contribution = min(protocol_score, protocol_score_cap) / protocol_score_cap</div>
+        <p>The cap prevents a noisy high-volume protocol from dominating every other source of evidence.</p>
+
+        <h3>Corroboration</h3>
+        <p>Anomalous protocol windows and anomalous target-IP windows for the same IP and time window become independent components. Additional components receive a capped protocol corroboration bonus. Exact responsible UIDs shared across at least two anomalous components receive a second capped bonus.</p>
+        <div class="formula">global_score = min(1, Σ contributions + protocol_bonus + exact_UID_bonus)</div>
+        <p>A global event is emitted when the score reaches the sensitivity-adjusted global threshold, or when enough independent components agree.</p>
+        <div class="callout good"><strong>Example:</strong> DNS contributes 0.30, HTTP contributes 0.30, and the second component adds 0.15. The global score is 0.75. If the responsible DNS and HTTP records share one exact UID, the default UID bonus adds 0.10, raising it to 0.85.</div>
+      </section>
+
+      <section id="attribution">
+        <h2>10. Why did the detector alert?</h2>
+        <p>The detector stores reasons and responsible records rather than returning only a score. Attribution is feature-aware:</p>
+        <div class="table-wrap"><table>
+          <thead><tr><th>Reason type</th><th>How responsible flows are selected</th></tr></thead>
+          <tbody>
+            <tr><td>New peer or categorical value</td><td>Records containing the first-seen peer or value.</td></tr>
+            <tr><td>Failure ratio</td><td>Records that satisfy the protocol's failure rule.</td></tr>
+            <tr><td>Port fan-out</td><td>Flows to the destination with the largest set of ports.</td></tr>
+            <tr><td>DGA-like or no-answer ratio</td><td>DNS records carrying the corresponding derived flag.</td></tr>
+            <tr><td>Numeric increase/decrease</td><td>Records ranked in the anomalous direction by the relevant numeric detail.</td></tr>
+            <tr><td>Missing expected behavior</td><td>Representative records that were present; absent records cannot have a UID.</td></tr>
+          </tbody>
+        </table></div>
+        <p>Each anomaly reports the feature value, learned mean, z-score, effective threshold, direction, explanation, responsible flow count, representative flows, and responsible UID/FUID sets.</p>
+      </section>
+
+      <section id="walkthrough">
+        <h2>11. Full example: a sudden DNS burst</h2>
+        <div class="example-flow">
+          <div class="phase">
+            <h3>Historical behavior</h3>
+            <p>One workstation produced these DNS counts in seven active five-minute windows:</p>
+            <pre>8, 9, 10, 10, 11, 12, 10</pre>
+            <p>After <code>ln(1+x)</code>, the historical median is approximately 2.398. MAD is approximately 0.087, so robust standard deviation is <code>1.4826 × 0.087 ≈ 0.129</code>.</p>
+          </div>
+          <div class="phase alert">
+            <h3>Current behavior</h3>
+            <p>The workstation now produces 50 DNS records. Its transformed value is:</p>
+            <pre>ln(1 + 50) ≈ 3.932</pre>
+            <p>The robust z-score is approximately <code>|3.932 − 2.398| / 0.129 = 11.89</code>. This crosses a threshold of 3.5 and becomes a <code>flow_count</code> reason.</p>
+          </div>
+        </div>
+        <p>The same window may also show new peers, higher query entropy, more DGA-like queries, or more failures. Each crossing adds a separate reason and z-score. If HTTP or connection behavior is also anomalous for that IP, the global ensemble combines the independent evidence.</p>
+      </section>
+
+      <section id="settings">
+        <h2>12. Settings that change detection</h2>
+        <div class="table-wrap"><table>
+          <thead><tr><th>Setting</th><th>Effect</th><th>Practical guidance</th></tr></thead>
+          <tbody>
+            <tr><td><code>window_seconds</code></td><td>Changes aggregation resolution.</td><td>Use 300 for short captures; use 3600 for smoother long-term behavior.</td></tr>
+            <tr><td><code>training_hours</code></td><td>Number of observed windows assumed benign.</td><td>Use only when the initial traffic is trusted.</td></tr>
+            <tr><td><code>normal_dirs</code></td><td>Fits known-normal folders before analysis.</td><td>Paths are on the server running the dashboard. Use the same IPs and window size.</td></tr>
+            <tr><td><code>minimum_points</code></td><td>History required before statistical z-scores become nonzero.</td><td>Lower values detect sooner but are less stable.</td></tr>
+            <tr><td><code>sensitivity</code></td><td>Divides feature/global thresholds and adjusts the component-count gate.</td><td>Above 1 emits more; below 1 emits fewer.</td></tr>
+            <tr><td><code>threshold</code></td><td>Fallback feature z-score threshold.</td><td>Higher means a feature must deviate further.</td></tr>
+            <tr><td><code>drift_alpha</code></td><td>Adaptation speed for small changes.</td><td>Higher follows legitimate change faster.</td></tr>
+            <tr><td><code>suspicious_alpha</code></td><td>Adaptation speed for suspicious changes.</td><td>Keep much smaller than drift alpha.</td></tr>
+            <tr><td><code>global_threshold</code></td><td>Score required for a global event.</td><td>Controls cross-protocol alert strictness.</td></tr>
+            <tr><td><code>uid_corroboration_bonus</code></td><td>Rewards exact responsible UIDs shared by anomalous components.</td><td>Keep capped so identifiers strengthen evidence without dominating it.</td></tr>
+          </tbody>
+        </table></div>
+        <div class="callout"><strong>Dashboard behavior:</strong> changing a configuration value reruns the complete analysis. Models are rebuilt from the selected input and optional normal folders, so the displayed result always corresponds to the visible settings.</div>
+      </section>
+    </main>
+  </div>
+
+  <footer class="footer">AnomalyDetectionProfiles · Explainable, adaptive anomaly detection over Zeek logs</footer>
+
+  <script>
+    const calculatorInputs = ["current", "median", "mad", "floor", "threshold", "sensitivity"];
+
+    function updateCalculator() {
+      const value = Object.fromEntries(calculatorInputs.map(id => [id, Number(document.getElementById(id).value)]));
+      const robustStd = Math.max(1.4826 * Math.max(0, value.mad), Math.max(0.001, value.floor));
+      const z = Math.abs(value.current - value.median) / robustStd;
+      const effective = value.threshold / Math.max(0.01, value.sensitivity);
+      const anomaly = z >= effective;
+      document.getElementById("calcResult").innerHTML =
+        `<strong>robust_std</strong> = ${robustStd.toFixed(4)} &nbsp; ` +
+        `<strong>z-score</strong> = ${z.toFixed(3)} &nbsp; ` +
+        `<strong>effective threshold</strong> = ${effective.toFixed(3)} ` +
+        `<span class="verdict ${anomaly ? "anomaly" : "normal"}">${anomaly ? "ANOMALY REASON" : "NO REASON"}</span>`;
+    }
+
+    calculatorInputs.forEach(id => document.getElementById(id).addEventListener("input", updateCalculator));
+    updateCalculator();
+  </script>
+</body>
+</html>
