@@ -7,9 +7,11 @@ import argparse
 import configparser
 import html
 import json
+import os
 import re
 import subprocess
 import sys
+import tempfile
 import time
 import webbrowser
 from http import HTTPStatus
@@ -27,7 +29,15 @@ HTML_PATH = ROOT / "dashboard.html"
 GUIDE_PATH = ROOT / "docs" / "index.html"
 DEFAULT_CONFIG = ROOT / "anomaly_detector.conf"
 DETECTOR = ROOT / "multi_protocol_anomaly_detector.py"
-RUNS_DIR = ROOT / ".dashboard_runs"
+DEFAULT_STATE_DIR = Path(tempfile.gettempdir()) / (
+    "anomaly-detection-profiles-dashboard-"
+    + str(getattr(os, "getuid", lambda: "user")())
+)
+STATE_DIR = Path(
+    os.environ.get("ANOMALY_DASHBOARD_STATE_DIR", str(DEFAULT_STATE_DIR))
+).expanduser()
+RUNS_DIR = STATE_DIR / "runs"
+SAVED_CONFIG = STATE_DIR / "anomaly_detector.conf"
 DOC_FILES = {
     "README.md": ROOT / "README.md",
     "MULTI_PROTOCOL_ANOMALY_DETECTION.md": ROOT / "MULTI_PROTOCOL_ANOMALY_DETECTION.md",
@@ -105,6 +115,11 @@ SETTING_METADATA = {
     "ssl_baseline_alpha": ("SSL baseline adaptation", "EWMA rate for normal SSL flows."),
     "ssl_max_small_anomalies": ("SSL small-reason limit", "Maximum reasons still treated as small flow drift."),
 }
+
+
+def dashboard_config_path() -> Path:
+    """Use a writable saved configuration when one exists."""
+    return SAVED_CONFIG if SAVED_CONFIG.is_file() else DEFAULT_CONFIG
 
 
 def read_config(path: Path | str) -> dict[str, dict[str, Any]]:
@@ -418,7 +433,7 @@ def run_detector(payload: dict[str, Any]) -> dict[str, Any]:
     run_id = time.strftime("%Y%m%d-%H%M%S") + f"-{time.time_ns() % 1_000_000:06d}"
     run_root = RUNS_DIR / run_id
     output_dir = run_root / "output"
-    run_root.mkdir(parents=True, exist_ok=False)
+    run_root.mkdir(parents=True, exist_ok=False, mode=0o700)
     config_path = run_root / "detector.conf"
     write_run_config(config_path, payload.get("config", {}))
     run_config = read_config(config_path)
@@ -528,10 +543,12 @@ class DashboardHandler(BaseHTTPRequestHandler):
             self.wfile.write(body)
             return
         if parsed.path == "/api/config":
-            config = read_config(DEFAULT_CONFIG)
+            config_path = dashboard_config_path()
+            config = read_config(config_path)
             self.send_json(
                 {
                     "config": config,
+                    "config_path": str(config_path),
                     "metadata": {
                         key: {"label": label, "help": help_text}
                         for key, (label, help_text) in SETTING_METADATA.items()
@@ -618,8 +635,9 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 self.send_json(run_detector(payload))
                 return
             if parsed.path == "/api/save-config":
-                write_run_config(DEFAULT_CONFIG, payload.get("config", {}))
-                self.send_json({"saved": str(DEFAULT_CONFIG), "ok": True})
+                STATE_DIR.mkdir(parents=True, exist_ok=True, mode=0o700)
+                write_run_config(SAVED_CONFIG, payload.get("config", {}))
+                self.send_json({"saved": str(SAVED_CONFIG), "ok": True})
                 return
             self.send_error(HTTPStatus.NOT_FOUND)
         except subprocess.TimeoutExpired:
@@ -640,10 +658,12 @@ def main() -> int:
     if args.host not in {"127.0.0.1", "localhost", "::1"}:
         print("error: dashboard may only bind to localhost", file=sys.stderr)
         return 2
-    RUNS_DIR.mkdir(exist_ok=True)
+    STATE_DIR.mkdir(parents=True, exist_ok=True, mode=0o700)
+    RUNS_DIR.mkdir(parents=True, exist_ok=True, mode=0o700)
     server = ThreadingHTTPServer((args.host, args.port), DashboardHandler)
     url = f"http://{args.host}:{args.port}/"
     print(f"Zeek anomaly dashboard: {url}")
+    print(f"Writable dashboard state: {STATE_DIR}")
     print("Press Ctrl-C to stop.")
     if args.open:
         webbrowser.open(url)
