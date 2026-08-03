@@ -24,6 +24,7 @@ from detection_core import ZeekReader, number
 ROOT = Path(__file__).resolve().parent
 LAUNCH_DIR = Path.cwd().resolve()
 HTML_PATH = ROOT / "dashboard.html"
+GUIDE_PATH = ROOT / "docs" / "index.html"
 DEFAULT_CONFIG = ROOT / "anomaly_detector.conf"
 DETECTOR = ROOT / "multi_protocol_anomaly_detector.py"
 RUNS_DIR = ROOT / ".dashboard_runs"
@@ -510,6 +511,15 @@ class DashboardHandler(BaseHTTPRequestHandler):
             self.send_response(HTTPStatus.OK)
             self.send_header("Content-Type", "text/html; charset=utf-8")
             self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
+        if parsed.path in {"/docs", "/docs/", "/docs/index.html"}:
+            body = GUIDE_PATH.read_bytes()
+            self.send_response(HTTPStatus.OK)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Cache-Control", "no-store")
             self.end_headers()
             self.wfile.write(body)
             return
