@@ -80,6 +80,10 @@ class DashboardTests(unittest.TestCase):
         self.assertIn("How a feature becomes anomalous", guide)
         self.assertIn("Full example: a sudden DNS burst", guide)
         self.assertIn("updateCalculator", guide)
+        self.assertIn("Live equation trace", guide)
+        self.assertIn("Where the value comes from", guide)
+        self.assertIn("deviation = |y − m|", guide)
+        self.assertIn("effective_threshold = T / S", guide)
         source = Path(dashboard.__file__).read_text(encoding="utf-8")
         self.assertIn('"/docs/"', source)
 
