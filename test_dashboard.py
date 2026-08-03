@@ -60,6 +60,16 @@ class DashboardTests(unittest.TestCase):
             "Ignore multicast/broadcast",
         )
 
+    def test_learning_guide_is_self_contained_and_served_by_dashboard(self):
+        guide = dashboard.GUIDE_PATH.read_text(encoding="utf-8")
+        self.assertIn("The complete pipeline", guide)
+        self.assertIn("Feature extraction", guide)
+        self.assertIn("How a feature becomes anomalous", guide)
+        self.assertIn("Full example: a sudden DNS burst", guide)
+        self.assertIn("updateCalculator", guide)
+        source = Path(dashboard.__file__).read_text(encoding="utf-8")
+        self.assertIn('"/docs/"', source)
+
     def test_dashboard_run_uses_submitted_config(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
