@@ -436,8 +436,16 @@
         <p>Selected-capture windows are anchored at <code>capture_start</code>. Therefore the first N consecutive windows end exactly at <code>training_end</code>, and detection begins with window N+1. This prevents post-training records from entering a training value. Each feature model still learns independently, but all models share the same capture-wide training start and end.</p>
 
         <h3>Welford training</h3>
-        <p>Welford's online algorithm updates the count, mean, and variance one observation at a time. It avoids storing the complete capture and is numerically stable.</p>
-        <div class="formula">count ← count + 1<br>delta ← value − old_mean<br>mean ← old_mean + delta / count<br>M2 ← M2 + delta × (value − new_mean)</div>
+        <p>The detector needs more than an average. For every feature model it must learn both the normal center and the normal amount of variation. A current value three units above the mean may be highly unusual for a feature that normally changes by 0.2, but ordinary for one that normally changes by 10. Variance measures that normal variation and later becomes part of the z-score denominator.</p>
+        <div class="grid-2">
+          <div class="card"><h3>What Welford produces</h3><p><code>count</code> records how many trusted window values were fitted. <code>mean</code> estimates their center. <code>M2</code> accumulates their squared deviations, from which the detector obtains the sample variance.</p></div>
+          <div class="card"><h3>Why calculate it this way?</h3><p>A two-pass calculation must first collect the values and then scan them again. The simple one-pass expression <code>mean(x²) − mean(x)²</code> subtracts two potentially large, nearly equal numbers and can lose precision. Welford updates the same sample mean and variance in one stable pass as windows arrive.</p></div>
+        </div>
+        <p>For each trusted window, the detector first converts the raw feature value to <code>value = ln(1 + raw_value)</code>. Welford then incorporates that transformed value with equal weight:</p>
+        <div class="formula">count_new = count_old + 1<br>delta = value − mean_old<br>mean_new = mean_old + delta / count_new<br>M2_new = M2_old + delta × (value − mean_new)<br>variance = M2_new / max(1, count_new − 1)</div>
+        <div class="callout"><strong>Why variance changes the decision:</strong> transformed histories <code>[2.3, 2.4, 2.5]</code> and <code>[1.4, 2.4, 3.4]</code> both have mean <code>2.4</code>. Their standard deviations are approximately <code>0.1</code> and <code>1.0</code>. A new value <code>2.7</code> is therefore about three standard deviations from the first stable history, but only 0.3 standard deviations from the second variable history. The mean alone cannot make this distinction.</div>
+        <div class="callout good"><strong>Why it is needed here:</strong> the resulting mean and variance provide the initial statistical baseline for each feature of each source-IP/protocol model and destination-IP model. Welford does not itself declare anomalies; the later scoring step compares a new transformed value with the learned baseline.</div>
+        <p>Welford is used only for traffic explicitly trusted as training. Every trusted value deserves equal weight. After training, values are no longer assumed benign, so the detector switches to controlled EWMA adaptation: normal drift updates the model normally, while strong anomalies update it much more slowly. The implementation also retains training values separately for robust threshold calibration; Welford itself does not need to rescan them to update the mean and variance.</p>
 
         <h3>Three ways to start</h3>
         <div class="grid-3">
@@ -507,45 +515,21 @@
           <div class="callout"><strong>Connection to this detector:</strong> this plot teaches the ordinary mean/standard-deviation z-score. The detector applies the same “distance divided by normal spread” idea after <code>ln(1+x)</code>. Once enough history exists, it substitutes the more outlier-resistant median and scaled MAD, and it also enforces the adaptive noise floor.</div>
         </div>
 
-        <h3>What exactly is the adaptive minimum noise floor?</h3>
-        <div class="callout"><strong>Concrete definition:</strong> the noise floor is one positive number stored inside each individual feature model. In the code it is named <code>minimum_std</code>. It starts at <code>0.1</code> and is measured in transformed <code>ln(1+x)</code> units. It is not a feature value, anomaly threshold, packet count, or standard deviation calculated from the feature values. It is the smallest denominator that the z-score is allowed to use.</div>
+        <h3>Noise floor: what it is and why it is needed</h3>
+        <div class="callout"><strong>Simple definition:</strong> the noise floor is the smallest normal variation that the detector allows when calculating a z-score. It is a lower limit for the z-score denominator. Each feature model has its own noise floor.</div>
+        <p>A z-score divides the current distance from normal by the feature's usual variation:</p>
+        <div class="formula">z-score = distance from normal / normal variation</div>
+        <p>If previous values are identical, their measured variation is zero and division is impossible. If their variation is merely tiny, an insignificant change can produce an enormous z-score. The noise floor prevents both problems:</p>
+        <div class="formula">variation used by z-score = max(measured variation, noise floor)<br>z-score = distance from normal / variation used by z-score</div>
+        <div class="callout warn"><strong>Example:</strong> measured variation is <code>0.002</code> and the current distance is <code>0.03</code>. Without a floor, <code>z = 0.03 / 0.002 = 15</code>. With a floor of <code>0.1</code>, <code>z = 0.03 / 0.1 = 0.3</code>. The small change no longer looks like an extreme anomaly.</div>
+        <p>The noise floor is not an anomaly threshold and is not a minimum packet or byte count. It only prevents the model from claiming that normal variation is unrealistically close to zero. Its value is measured after the <code>ln(1+x)</code> transformation and starts at <code>0.1</code>.</p>
 
-        <h3>What does “dispersion” mean, and dispersion of what?</h3>
-        <p><strong>“Dispersion” is only a statistics term for spread.</strong> It means how far the numbers in one named list lie from that list's center. In this detector, the list is the retained transformed values of one exact feature in one exact model—not all traffic, not all features, and not anomaly scores. The guide uses the clearer word <strong>spread</strong> below.</p>
-        <p>For example, the DNS <code>flow_count</code> model for source <code>10.0.0.5</code> may retain these transformed values from previous windows:</p>
-        <div class="formula">recent transformed feature values = [2.30, 2.32, 2.31, 2.33, 2.30, 2.32, 2.31]</div>
-        <p>Those numbers are tightly grouped around approximately <code>2.31</code>, so their spread is small. The detector calculates that spread from this exact list:</p>
-        <div class="formula">center = median(recent transformed feature values)<br>feature_MAD = median(|each transformed feature value − center|)<br>feature spread = 1.4826 × feature_MAD</div>
-        <p>With fewer than seven retained values, it instead uses the running standard deviation, which is the square root of the running variance. Therefore, the measured spread always belongs to the previous transformed values of the one feature currently being scored. For example, while scoring DNS <code>flow_count</code> for <code>10.0.0.5</code>, it does not use the values of DNS entropy, another source, or another protocol.</p>
-
-        <h3>The noise floor uses a second, different list</h3>
-        <p>The feature-value list above estimates how much the feature itself has varied. The noise floor is learned from a separate list of <strong>residuals</strong>. A residual is the model's prediction error immediately before the current observation is learned:</p>
-        <div class="formula">y = ln(1 + current raw feature value)<br>old_mean = feature model's mean before updating with y<br>residual = |y − old_mean|</div>
-        <p>Example: if the transformed current value is <code>2.35</code> and the mean before updating is <code>2.31</code>, the stored residual is:</p>
-        <div class="formula">residual = |2.35 − 2.31| = 0.04</div>
-        <p>The model retains at most the latest 64 residuals for that same feature model. The first observation has no previous mean, so it cannot create a residual. Until five residuals exist, the noise floor stays exactly at its initial value of <code>0.1</code>.</p>
-
-        <h3>Exact noise-floor calculation</h3>
-        <div class="formula">q10 = 10th percentile of the recent residual list<br>residual_center = median(recent residual list)<br>residual_MAD = median(|each residual − residual_center|)<br>candidate_floor = max(0.01, q10, 1.4826 × residual_MAD)<br>new_noise_floor = 0.95 × old_noise_floor + 0.05 × candidate_floor</div>
-        <p>Suppose the model has these five recent residuals:</p>
-        <div class="formula">residuals = [0.02, 0.04, 0.03, 0.05, 0.02]<br>sorted residuals = [0.02, 0.02, 0.03, 0.04, 0.05]<br>q10 = 0.02<br>residual_center = median(...) = 0.03<br>distances from residual center = [0.01, 0.01, 0.00, 0.02, 0.01]<br>residual_MAD = median([0.00, 0.01, 0.01, 0.01, 0.02]) = 0.01<br>1.4826 × residual_MAD = 0.014826<br>candidate_floor = max(0.01, 0.02, 0.014826) = 0.02<br>old_noise_floor = 0.10<br>new_noise_floor = 0.95 × 0.10 + 0.05 × 0.02 = 0.096</div>
-        <p>The floor does not jump directly from <code>0.10</code> to <code>0.02</code>. One update moves it only 5% toward the candidate, producing <code>0.096</code>. Repeated small residuals can continue lowering it gradually; larger residual patterns can raise it.</p>
-
-        <div class="calculator">
-          <h3>Interactive noise-floor calculation</h3>
-          <p>Enter the residuals already stored by one feature model and its current floor.</p>
-          <div class="calc-grid">
-            <label style="grid-column:span 3">Recent residuals, comma separated<input id="floorResiduals" type="text" value="0.02, 0.04, 0.03, 0.05, 0.02"></label>
-            <label>Old noise floor<input id="oldNoiseFloor" type="number" min="0" step="0.001" value="0.1"></label>
-          </div>
-          <div id="floorResult" class="calc-output" aria-live="polite"></div>
-        </div>
-
-        <h3>Where the floor enters the z-score</h3>
-        <p>The detector calculates feature spread from the recent transformed feature-value list, then prevents that spread from becoming smaller than the separately learned noise floor:</p>
-        <div class="formula">fewer than 7 feature values:<br>z denominator = max(running standard deviation, noise floor)<br><br>7 or more feature values:<br>z denominator = max(1.4826 × feature MAD, noise floor)<br><br>z = |current transformed value − historical center| / z denominator</div>
-        <div class="callout warn"><strong>Why this matters:</strong> if feature spread is <code>0.002</code> and the current transformed value is only <code>0.03</code> from the center, division by <code>0.002</code> gives <code>z = 15</code>. If the noise floor is <code>0.1</code>, the denominator becomes <code>max(0.002, 0.1) = 0.1</code>, so <code>z = 0.03 / 0.1 = 0.3</code>. The floor prevents nearly identical historical values from turning tiny numerical movement into an enormous score.</div>
-        <div class="callout"><strong>Units:</strong> a floor of <code>0.1</code> is not 0.1 packets or bytes. It is 0.1 after <code>ln(1+x)</code>. A log-space difference of 0.1 corresponds approximately to a factor of <code>e^0.1 ≈ 1.105</code> in <code>1+x</code>.</div>
+        <h3>How the floor adapts</h3>
+        <p>The appropriate minimum variation can differ between feature models. The detector therefore adjusts each floor from that model's recent residuals. A residual is the absolute difference between a transformed value and the model mean before learning that value:</p>
+        <div class="formula">residual = |current transformed value − old mean|</div>
+        <p>The latest 64 residuals are retained. Once at least five exist, the detector calculates a candidate and moves the current floor only 5% toward it:</p>
+        <div class="formula">candidate_floor = max(0.01, residual q10, 1.4826 × residual MAD)<br>new_noise_floor = 0.95 × old_noise_floor + 0.05 × candidate_floor</div>
+        <p>This gradual update lets the minimum follow recurring small model errors without jumping because of one observation.</p>
 
         <h3>Step C — compare with the effective threshold</h3>
         <p>After at least ten benign training values, the detector can calibrate the threshold from the configured benign quantile. Otherwise, it uses the configured fallback threshold.</p>
@@ -637,9 +621,9 @@
         <p>The adaptation rate is selected from the <strong>total score of one source-IP/protocol window</strong>, not separately for each feature. If one or more reasons push the sum above <code>adaptation_score</code>, every feature model for that window receives the slow suspicious update. Destination-IP windows use the same rule.</p>
 
         <h3>How training adaptation works: equal-weight Welford fitting</h3>
-        <p>During trusted training, all fitted windows have equal weight. If the old model contains <code>n</code> values, Welford adds the new transformed value <code>y</code> exactly:</p>
+        <p>During trusted training, all fitted windows have equal weight. Welford is the baseline estimator described in the training section: it learns the center and variation without favoring recent training windows. If the old model contains <code>n</code> values, it adds the new transformed value <code>y</code> exactly:</p>
         <div class="formula">n_new = n + 1<br>delta = y − mean_old<br>mean_new = mean_old + delta / n_new<br>M2_new = M2_old + delta × (y − mean_new)<br>variance_new = M2_new / max(1, n_new − 1)</div>
-        <p>This produces the ordinary sample mean and variance without loading the complete dataset into memory. Training values are also retained for empirical threshold calibration. With fewer than ten benign training values, calibration is not considered stable enough and the configured fallback threshold is used.</p>
+        <p>This produces the ordinary sample mean and sample variance without recomputing them from the complete history after every window. Training values are retained separately for empirical threshold calibration. With fewer than ten benign training values, calibration is not considered stable enough and the configured fallback threshold is used.</p>
 
         <h3>How detection adaptation works: recency-weighted EWMA</h3>
         <p>After training—or immediately when training is zero—the mean and variance use exponentially weighted updates. Recent behavior matters more than old behavior:</p>
@@ -891,41 +875,6 @@
         `<div>Decision<strong class="${anomaly ? "higher" : ""}">${anomaly ? "Threshold crossed" : "Below threshold"}</strong>|z| = ${absoluteZ.toFixed(4)} ${anomaly ? "≥" : "<"} ${threshold.toFixed(4)}</div>`;
     }
 
-    function interpolatedQuantile(values, fraction) {
-      const ordered = [...values].sort((left, right) => left - right);
-      const position = Math.max(0, Math.min(1, fraction)) * (ordered.length - 1);
-      const low = Math.floor(position), high = Math.ceil(position);
-      if (low === high) return ordered[low];
-      const weight = position - low;
-      return ordered[low] * (1 - weight) + ordered[high] * weight;
-    }
-
-    function updateFloorCalculator() {
-      const residuals = document.getElementById("floorResiduals").value.split(",")
-        .map(value => Number(value.trim())).filter(value => Number.isFinite(value) && value >= 0).slice(-64);
-      const oldFloorInput = Number(document.getElementById("oldNoiseFloor").value);
-      const oldFloor = Number.isFinite(oldFloorInput) ? Math.max(0, oldFloorInput) : 0.1;
-      const output = document.getElementById("floorResult");
-      if (residuals.length < 5) {
-        output.innerHTML = `<div class="callout warn"><strong>${residuals.length} valid residuals:</strong> at least five are required. The code returns without updating, so the noise floor remains ${oldFloor.toFixed(6)}.</div>`;
-        return;
-      }
-      const q10 = interpolatedQuantile(residuals, 0.10);
-      const center = interpolatedQuantile(residuals, 0.50);
-      const distances = residuals.map(value => Math.abs(value - center));
-      const mad = interpolatedQuantile(distances, 0.50);
-      const scaledMad = 1.4826 * mad;
-      const candidate = Math.max(0.01, q10, scaledMad);
-      const updated = 0.95 * oldFloor + 0.05 * candidate;
-      output.innerHTML = `<h4>Exact result</h4><div class="equation-trace">
-        <div class="equation-step"><span class="eq-number">1</span><div><div class="eq-title">Residual list used</div><div class="eq-formula">[${residuals.map(value => value.toFixed(6)).join(", ")}]</div><div class="eq-meaning">${residuals.length} values; only the latest 64 are retained.</div></div></div>
-        <div class="equation-step"><span class="eq-number">2</span><div><div class="eq-title">Low recurring error</div><div class="eq-formula">q10 = ${q10.toFixed(6)}</div></div></div>
-        <div class="equation-step"><span class="eq-number">3</span><div><div class="eq-title">Spread of the residual list</div><div class="eq-formula">residual median = ${center.toFixed(6)}<br>residual MAD = ${mad.toFixed(6)}<br>1.4826 × MAD = ${scaledMad.toFixed(6)}</div></div></div>
-        <div class="equation-step"><span class="eq-number">4</span><div><div class="eq-title">Candidate lower bound</div><div class="eq-formula">candidate = max(0.01, ${q10.toFixed(6)}, ${scaledMad.toFixed(6)}) = ${candidate.toFixed(6)}</div></div></div>
-        <div class="equation-step final"><span class="eq-number">5</span><div><div class="eq-title">Gradual floor update</div><div class="eq-formula">new floor = 0.95 × ${oldFloor.toFixed(6)} + 0.05 × ${candidate.toFixed(6)} = ${updated.toFixed(6)}</div></div></div>
-      </div>`;
-    }
-
     function updateCalculator() {
       const value = Object.fromEntries(calculatorInputs.map(id => [id, Number(document.getElementById(id).value)]));
       const current = Math.log1p(Math.max(0, value.rawCurrent));
@@ -971,10 +920,7 @@
     document.getElementById("zThreshold").addEventListener("input", () => updateZPlot("threshold"));
     document.getElementById("zValue").addEventListener("input", () => updateZPlot("slider"));
     document.getElementById("zValueNumber").addEventListener("input", () => updateZPlot("number"));
-    document.getElementById("floorResiduals").addEventListener("input", updateFloorCalculator);
-    document.getElementById("oldNoiseFloor").addEventListener("input", updateFloorCalculator);
     updateZPlot("model");
-    updateFloorCalculator();
     updateCalculator();
   </script>
 </body>
