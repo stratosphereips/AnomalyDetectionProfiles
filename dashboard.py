@@ -130,8 +130,8 @@ SETTING_METADATA = {
     ),
     "experimental_multivariate_mode": (
         "Multivariate model mode",
-        "Learns joint feature relationships. It is restricted to Off or Shadow "
-        "until its disagreements with the core have been evaluated.",
+        "Learns joint feature relationships for source/protocol and destination-IP windows. "
+        "Shadow compares only; Active may add official anomalies.",
     ),
     "multivariate_minimum_points": (
         "Multivariate baseline points",
@@ -147,8 +147,31 @@ SETTING_METADATA = {
     ),
     "multivariate_history_limit": (
         "Multivariate history",
-        "Maximum recent windows retained per source-IP/protocol model.",
+        "Maximum recent windows retained per source/protocol or destination-IP model.",
     ),
+    "experimental_pca_mode": ("PCA mode", "Reconstruction detector. Shadow compares only; Active may add anomalies."),
+    "pca_minimum_points": ("PCA baseline points", "Prior windows required before PCA reconstruction is scored."),
+    "pca_threshold": ("PCA error threshold", "Minimum reconstruction error required for a candidate."),
+    "pca_components": ("PCA components", "Number of dominant historical feature patterns retained."),
+    "pca_history_limit": ("PCA history", "Maximum recent windows used to rebuild the PCA model."),
+    "experimental_isolation_mode": ("Isolation Forest mode", "Random-partition detector. Shadow compares only; Active may add anomalies."),
+    "isolation_minimum_points": ("Isolation baseline points", "Prior windows required before isolation scoring."),
+    "isolation_threshold": ("Isolation score threshold", "Minimum 0–1 isolation score required for a candidate."),
+    "isolation_trees": ("Isolation trees", "Number of random partition trees; more trees are steadier but slower."),
+    "isolation_history_limit": ("Isolation history", "Maximum recent windows supplied to the forest."),
+    "experimental_rarity_mode": ("Rarity/novelty mode", "Empirical tail detector. Shadow compares only; Active may add anomalies."),
+    "rarity_minimum_points": ("Rarity baseline points", "Prior windows required to estimate empirical rarity."),
+    "rarity_threshold": ("Rarity threshold", "Minimum -log10 empirical tail probability required for a candidate."),
+    "rarity_history_limit": ("Rarity history", "Maximum recent windows used as the empirical reference."),
+    "experimental_change_mode": ("Time-series change mode", "Sustained level-change detector. Shadow compares only; Active may add anomalies."),
+    "change_minimum_points": ("Change baseline points", "Prior windows required before a recent level is compared with the earlier level."),
+    "change_threshold": ("Change threshold", "Minimum robust standardized level shift required for a candidate."),
+    "change_recent_windows": ("Recent change windows", "Number of consecutive recent windows treated as the new level."),
+    "change_history_limit": ("Change history", "Maximum recent windows retained for level-change comparison."),
+    "experimental_graph_mode": ("Graph detector mode", "New destination and fan-out detector. Shadow compares only; Active may add anomalies."),
+    "graph_minimum_points": ("Graph baseline points", "Prior source-IP graph snapshots required before graph scoring."),
+    "graph_threshold": ("Graph score threshold", "Minimum combined new-peer and fan-out score required for a candidate."),
+    "graph_history_limit": ("Graph history", "Maximum recent source-IP graph snapshots retained."),
 }
 
 
