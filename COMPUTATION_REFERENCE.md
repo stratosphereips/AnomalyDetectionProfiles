@@ -866,6 +866,36 @@ run. The dashboard displays and snapshots those effective configured values.
 | `max_responsible_flows` | `10` | Maximum representative Zeek records embedded in each protocol or global anomaly |
 | `output_dir` | `multi_protocol_ad_output` | Destination directory; does not affect detection |
 
+### Optional detector settings
+
+Every real optional detector has an `experimental_*_mode` setting with values
+`off`, `shadow`, or `active`. Off does not run. Shadow records candidates but
+does not alter official output. Active may add candidates; it never removes or
+reduces a core anomaly.
+
+| Detector | Mode key | Main decision |
+| -------- | -------- | ------------- |
+| Robust multivariate | `experimental_multivariate_mode` | dimension-normalized robust Mahalanobis distance ≥ `multivariate_threshold` |
+| PCA reconstruction | `experimental_pca_mode` | reconstruction error ≥ `pca_threshold` |
+| Isolation Forest | `experimental_isolation_mode` | isolation score ≥ `isolation_threshold` |
+| Empirical rarity | `experimental_rarity_mode` | −log10 empirical tail probability ≥ `rarity_threshold` |
+| Time-series change | `experimental_change_mode` | robust recent-level shift ≥ `change_threshold` |
+| Communication graph | `experimental_graph_mode` | weighted new-destination/fan-out score ≥ `graph_threshold` |
+
+Each method also has `*_minimum_points` and `*_history_limit`. PCA adds
+`pca_components`, Isolation Forest adds `isolation_trees`, time-series change
+adds `change_recent_windows`, and multivariate detection adds
+`multivariate_shrinkage`. Numeric methods analyze source-IP/protocol converted
+features and the different destination-IP converted features independently.
+The graph method instead unions all destination IPs contacted by one source IP
+across protocols in each window.
+
+Active integration is set union, not voting against the core:
+
+```text
+official IDs = core IDs union all Active-module candidate IDs
+```
+
 ## 🔎 Responsible-flow attribution
 
 Every emitted anomaly contains `responsible_flow_count` and
