@@ -539,6 +539,12 @@ class MultiProtocolTests(unittest.TestCase):
                 1.0,
             )
             detector.finalize_all()
+            self.assertTrue(
+                all(row["responsible_flows"] for row in detector.protocol_window_rows)
+            )
+            self.assertTrue(
+                all(row["responsible_flows"] for row in detector.target_window_rows)
+            )
             output.close()
             rows = [
                 json.loads(line)
