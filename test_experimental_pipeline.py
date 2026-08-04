@@ -3,13 +3,14 @@ import unittest
 from experimental_pipeline import (
     ExperimentalModule,
     ExperimentalPipeline,
+    CoreMirrorModule,
     ModuleEvidence,
     NoOpModule,
     PipelineContext,
 )
 
 
-def context() -> PipelineContext:
+def context(with_core: bool = False) -> PipelineContext:
     return PipelineContext(
         records_processed=12,
         window_seconds=300,
@@ -18,6 +19,18 @@ def context() -> PipelineContext:
         target_anomalies=0,
         ssl_flow_alerts=0,
         global_anomalies=1,
+        core_detections=(
+            (
+                {
+                    "detection_id": "10.0.0.1@300",
+                    "host": "10.0.0.1",
+                    "window_start": 300,
+                    "score": 0.75,
+                },
+            )
+            if with_core
+            else ()
+        ),
     )
 
 
@@ -62,8 +75,21 @@ class ExperimentalPipelineTests(unittest.TestCase):
                 "module", "label", "mode", "status", "eligible", "score",
                 "candidate_contribution", "contribution", "affects_detection",
                 "reasons", "responsible_uids", "responsible_fuids",
-                "top_features", "error",
+                "top_features", "candidate_detections", "comparison", "error",
             },
+        )
+
+    def test_core_mirror_has_exact_decision_and_score_agreement(self):
+        result = ExperimentalPipeline(
+            [(CoreMirrorModule(), "shadow")]
+        ).run(context(with_core=True))[0]
+        self.assertEqual(result.contribution, 0)
+        self.assertEqual(result.comparison["core_count"], 1)
+        self.assertEqual(result.comparison["module_count"], 1)
+        self.assertEqual(result.comparison["overlap_count"], 1)
+        self.assertEqual(result.comparison["decision_agreement"], 1.0)
+        self.assertEqual(
+            result.comparison["mean_absolute_score_difference"], 0.0
         )
 
 
