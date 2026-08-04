@@ -301,8 +301,8 @@
         <p>The adaptive statistical detector shown throughout this page is the <strong>locked core</strong>. Experimental detectors are placed after the core has completed its feature scoring, anomaly decisions, and adaptation. This preserves a known-good result while a new technique is evaluated.</p>
         <div class="grid-3">
           <div class="card"><h3>Off</h3><p>The module is not executed. Its score and contribution are zero.</p></div>
-          <div class="card"><h3>Shadow</h3><p>The module executes and reports evidence, but the pipeline forces its effective contribution to zero. Core scores and decisions remain identical.</p></div>
-          <div class="card"><h3>Active</h3><p>The module is permitted to contribute when it is eligible. Activation starts a complete dashboard recomputation; it does not mutate a saved core model. The currently installed no-op module has no contribution to apply.</p></div>
+          <div class="card"><h3>Shadow = safe dry run</h3><p>The module executes and shows what it would select, but its contribution is forced to zero. It cannot add, remove, or modify an official anomaly.</p></div>
+          <div class="card"><h3>Active = trusted decision maker</h3><p>An Active detector is allowed to affect official anomaly decisions. Only the locked statistical core is Active today. Experimental modules do not currently offer Active mode.</p></div>
         </div>
         <div class="formula">module result = { status, eligible, score, candidate_contribution, contribution, reasons, top_features, responsible_uids, responsible_fuids }<br>Off or Shadow → contribution = 0<br>Active and eligible → contribution = candidate_contribution</div>
         <p>The initial <code>noop_v1</code> module validates this control path. It deliberately returns score 0 and candidate contribution 0, including in Active mode. It is not another anomaly technique yet. If any experimental module raises an error, the pipeline reports that module as failed with contribution 0 and the core result remains available.</p>
@@ -310,13 +310,34 @@
         <p>Final global decisions are identified as <code>source-IP@window-start</code>. The Pipeline comparison tab compares the core set with a module's candidate set:</p>
         <div class="formula">overlap = core IDs ∩ module IDs<br>core only = core IDs − module IDs<br>module only = module IDs − core IDs<br>decision agreement = |overlap| / |core IDs ∪ module IDs|<br>score difference = mean(|core score − module score|) over overlapping IDs</div>
         <p>The core is a stable reference, not ground truth. A module-only result is a disagreement to investigate, not automatically a false positive; a core-only result is not automatically a module failure. The initial <code>core_mirror_v1</code> module copies the core output and should therefore produce 100% agreement and zero score difference. This known answer validates the comparison path before a different model is introduced.</p>
-        <div class="callout good"><strong>How to read the dashboard:</strong> the core card is always Active and Locked. The experimental card shows the mode used for the completed run, its health, and its actual contribution. Changing the mode with Auto-run enabled starts a fresh run after 700 ms; otherwise press Run analysis.</div>
+        <div class="callout good"><strong>How to read the dashboard:</strong> the core card is always Active and Locked, so it creates the official anomalies. A Shadow card means “calculated for comparison, zero official effect.” Changing a mode with Auto-run enabled starts a fresh run after 700 ms; otherwise press Run analysis.</div>
       </section>
 
       <section id="multivariate">
         <h2>Robust multivariate feature-relationship detector</h2>
         <p>This is the first experimental detector that makes independent candidate decisions. The core asks whether each feature is unusual separately. The multivariate model asks whether the <strong>combination</strong> and relationship among all features is unusual. Version 1 models source-IP/protocol windows; target-IP windows and individual TLS flow alerts remain outside this experimental model.</p>
+        <h3>Plain-language process</h3>
+        <div class="pipeline">
+          <div class="step"><span class="step-num">1</span><h3>Make one row</h3><p>All connection, DNS, or other protocol features for one IP and time window become one numeric row.</p></div>
+          <div class="step"><span class="step-num">2</span><h3>Learn relationships</h3><p>Earlier rows teach which features normally rise, fall, or remain stable together.</p></div>
+          <div class="step"><span class="step-num">3</span><h3>Measure the new row</h3><p>The model calculates one raw joint distance from the learned feature pattern.</p></div>
+          <div class="step"><span class="step-num">4</span><h3>Suggest only</h3><p>If distance reaches the threshold, a Shadow candidate appears. Official anomalies remain unchanged.</p></div>
+        </div>
         <div class="callout good"><strong>Example:</strong> a DNS window's query count and response count can each fall inside their ordinary ranges. If those two values normally rise and fall together, an ordinary query count combined with an ordinary but mismatched response count can still be a new joint pattern. Covariance represents that learned relationship.</div>
+
+        <h3>Reading one dashboard candidate</h3>
+        <div class="table-wrap"><table>
+          <thead><tr><th>Displayed value</th><th>Meaning</th></tr></thead>
+          <tbody>
+            <tr><td>Source IP and window start</td><td>The host and exact time bucket whose complete feature combination was evaluated.</td></tr>
+            <tr><td>Protocol</td><td>The independent per-protocol model, such as <code>conn</code> or <code>dns</code>.</td></tr>
+            <tr><td>Raw joint distance</td><td>The actual multivariate score used in the threshold comparison.</td></tr>
+            <tr><td>Threshold</td><td>The required raw distance. A candidate exists only when distance is at least this value.</td></tr>
+            <tr><td>Normalized display score</td><td>A bounded 0–1 visualization. It is <strong>not probability, confidence, severity, or maliciousness</strong>.</td></tr>
+            <tr><td>Strongest contributing features</td><td>The feature dimensions that contributed most to joint distance. They need not be individually anomalous.</td></tr>
+            <tr><td>Shadow · no official effect</td><td>The candidate is available for investigation but did not change any official anomaly.</td></tr>
+          </tbody>
+        </table></div>
 
         <h3>Exact calculation</h3>
         <p>One model is maintained for each <code>(source IP, protocol)</code>. Suppose its current window contains <code>p</code> numeric features.</p>
