@@ -119,12 +119,27 @@ SETTING_METADATA = {
         "Off does not execute it. Shadow executes it but cannot affect detection. "
         "Active permits a contribution, but this validation module always contributes zero.",
     ),
+    "experimental_mirror_mode": (
+        "Core mirror mode",
+        "Validation module that copies core host/window decisions. In Shadow "
+        "mode, the comparison should show complete agreement and zero score difference.",
+    ),
 }
 
 
 def dashboard_config_path() -> Path:
     """Use a writable saved configuration when one exists."""
     return SAVED_CONFIG if SAVED_CONFIG.is_file() else DEFAULT_CONFIG
+
+
+def dashboard_config() -> dict[str, dict[str, Any]]:
+    """Merge saved values over packaged defaults so upgrades gain new keys."""
+
+    result = read_config(DEFAULT_CONFIG)
+    if SAVED_CONFIG.is_file():
+        for section, values in read_config(SAVED_CONFIG).items():
+            result.setdefault(section, {}).update(values)
+    return result
 
 
 def read_config(path: Path | str) -> dict[str, dict[str, Any]]:
@@ -554,7 +569,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
             return
         if parsed.path == "/api/config":
             config_path = dashboard_config_path()
-            config = read_config(config_path)
+            config = dashboard_config()
             self.send_json(
                 {
                     "config": config,
