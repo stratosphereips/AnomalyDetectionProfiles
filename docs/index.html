@@ -162,6 +162,14 @@
     .verdict { display: inline-block; margin-left: 0.4rem; padding: 0.15rem 0.5rem; border-radius: 999px; font-weight: 800; }
     .verdict.anomaly { color: #7f1d1d; background: #fecaca; }
     .verdict.normal { color: #064e3b; background: #a7f3d0; }
+    .z-demo { margin: 1.2rem 0; padding: 1.2rem; border: 1px solid #bfd0f0; border-radius: var(--radius); background: white; box-shadow: var(--shadow); }
+    .z-controls { display: grid; grid-template-columns: repeat(3, minmax(130px, 1fr)); gap: 0.8rem; }
+    .z-slider { margin: 1rem 0; }
+    .z-slider input { accent-color: var(--violet); }
+    .z-plot { width: 100%; min-height: 280px; border: 1px solid #d8e1ee; border-radius: 10px; background: #f8fbff; }
+    .z-result { display: grid; grid-template-columns: repeat(3, 1fr); gap: 0.7rem; margin-top: 0.8rem; }
+    .z-result div { padding: 0.7rem; border: 1px solid #d8e1ee; border-radius: 8px; background: #f8fbff; }
+    .z-result strong { display: block; color: #173c70; font-size: 1.15rem; }
 
     .example-flow { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; }
     .phase { padding: 1rem; border-top: 4px solid var(--blue); border-radius: 8px; background: white; box-shadow: var(--shadow); }
@@ -192,10 +200,10 @@
 <body>
   <header class="hero">
     <div class="eyebrow">AnomalyDetectionProfiles · Learning guide</div>
-    <h1>How does the Zeek anomaly detector decide that traffic is unusual?</h1>
+    <h1>How Zeek Anomaly Detection Works</h1>
     <p>This page follows one record through the complete detector. It explains what is measured, how normal behavior is learned, how anomaly scores are calculated, and why a final alert is emitted.</p>
     <div class="hero-links">
-      <a href="#tour">15-minute overview</a>
+      <a href="#tour">Summary</a>
       <a href="#overview">Start with the pipeline</a>
       <a href="#features">See feature examples</a>
       <a href="#scoring">Score calculator</a>
@@ -206,10 +214,9 @@
   <div class="layout">
     <nav aria-label="Page contents">
       <strong>On this page</strong>
-      <a href="#tour">15-minute summary</a>
+      <a href="#tour">Summary</a>
       <a href="#overview">1. Complete pipeline</a>
       <a href="#experimental">Safe experiments</a>
-      <a href="#multivariate">Multivariate detector</a>
       <a href="#input">2. Input and correlation</a>
       <a href="#windows">3. Time windows</a>
       <a href="#features">4. Feature extraction</a>
@@ -218,6 +225,7 @@
       <a href="#special">7. Specialized techniques</a>
       <a href="#adaptation">8. Model and adaptation</a>
       <a href="#ensemble">9. Global ensemble</a>
+      <a href="#multivariate">Experimental multivariate detector</a>
       <a href="#attribution">10. Explaining alerts</a>
       <a href="#walkthrough">11. Full example</a>
       <a href="#settings">12. Important settings</a>
@@ -225,7 +233,7 @@
 
     <main>
       <section id="tour">
-        <h2>The whole detector in approximately 15 minutes</h2>
+        <h2>Summary</h2>
         <p class="lead">This overview answers four questions: Where does the data come from? What numerical values are produced? What becomes an anomaly? What is updated afterward?</p>
         <div class="callout good"><strong>One-sentence summary:</strong> Zeek records are correlated and grouped into time windows, each window becomes an explainable feature vector, every feature is compared with its own per-IP statistical history, threshold-crossing features become anomaly reasons, and corroborating component anomalies become a global IP anomaly before the models adapt.</div>
 
@@ -259,11 +267,11 @@
 
         <h3>Five stages of the process</h3>
         <div class="tour-grid">
-          <div class="tour-card"><div class="tour-time">Stage 1 · 0–3 min</div><h3>Records and identity</h3><p>Zeek produces protocol logs containing timestamps, endpoints, UID/FUID identifiers, and protocol fields. Missing TLS removes only TLS-specific detection.</p></div>
-          <div class="tour-card"><div class="tour-time">Stage 2 · 3–6 min</div><h3>Windows and features</h3><p>Records become comparable time buckets and then numeric counts, ratios, novelty, lexical, transfer, and authentication features.</p></div>
-          <div class="tour-card"><div class="tour-time">Stage 3 · 6–9 min</div><h3>Statistical comparison</h3><p>Per-IP and per-feature history supplies the <code>log1p</code>, median/MAD, noise-floor, z-score, and sensitivity-adjusted threshold calculations.</p></div>
-          <div class="tour-card"><div class="tour-time">Stage 4 · 9–12 min</div><h3>Reasons and adaptation</h3><p>Only threshold-crossing features become reasons. Welford fitting handles trusted training; EWMA handles ordinary drift and slower strong-anomaly adaptation.</p></div>
-          <div class="tour-card"><div class="tour-time">Stage 5 · 12–15 min</div><h3>Outputs and evidence</h3><p>Flow, protocol, target, and global outputs retain their scores, responsible records, UID/FUID evidence, and contribution details.</p></div>
+          <div class="tour-card"><div class="tour-time">Stage 1</div><h3>Records and identity</h3><p>Zeek produces protocol logs containing timestamps, endpoints, UID/FUID identifiers, and protocol fields. Missing TLS removes only TLS-specific detection.</p></div>
+          <div class="tour-card"><div class="tour-time">Stage 2</div><h3>Windows and features</h3><p>Records become comparable time buckets and then numeric counts, ratios, novelty, lexical, transfer, and authentication features.</p></div>
+          <div class="tour-card"><div class="tour-time">Stage 3</div><h3>Statistical comparison</h3><p>Per-IP and per-feature history supplies the <code>log1p</code>, median/MAD, noise-floor, z-score, and sensitivity-adjusted threshold calculations.</p></div>
+          <div class="tour-card"><div class="tour-time">Stage 4</div><h3>Reasons and adaptation</h3><p>Only threshold-crossing features become reasons. Welford fitting handles trusted training; EWMA handles ordinary drift and slower strong-anomaly adaptation.</p></div>
+          <div class="tour-card"><div class="tour-time">Stage 5</div><h3>Outputs and evidence</h3><p>Flow, protocol, target, and global outputs retain their scores, responsible records, UID/FUID evidence, and contribution details.</p></div>
         </div>
 
         <h3>What exactly goes into each anomaly?</h3>
@@ -313,55 +321,6 @@
         <div class="callout good"><strong>How to read the dashboard:</strong> the core card is always Active and Locked, so it creates the official anomalies. A Shadow card means “calculated for comparison, zero official effect.” Changing a mode with Auto-run enabled starts a fresh run after 700 ms; otherwise press Run analysis.</div>
       </section>
 
-      <section id="multivariate">
-        <h2>Robust multivariate feature-relationship detector</h2>
-        <p>This is the first experimental detector that makes independent candidate decisions. The core asks whether each feature is unusual separately. The multivariate model asks whether the <strong>combination</strong> and relationship among all features is unusual. Version 1 models source-IP/protocol windows; target-IP windows and individual TLS flow alerts remain outside this experimental model.</p>
-        <h3>Plain-language process</h3>
-        <div class="pipeline">
-          <div class="step"><span class="step-num">1</span><h3>Make one row</h3><p>All connection, DNS, or other protocol features for one IP and time window become one numeric row.</p></div>
-          <div class="step"><span class="step-num">2</span><h3>Learn relationships</h3><p>Earlier rows teach which features normally rise, fall, or remain stable together.</p></div>
-          <div class="step"><span class="step-num">3</span><h3>Measure the new row</h3><p>The model calculates one raw joint distance from the learned feature pattern.</p></div>
-          <div class="step"><span class="step-num">4</span><h3>Suggest only</h3><p>If distance reaches the threshold, a Shadow candidate appears. Official anomalies remain unchanged.</p></div>
-        </div>
-        <div class="callout good"><strong>Example:</strong> a DNS window's query count and response count can each fall inside their ordinary ranges. If those two values normally rise and fall together, an ordinary query count combined with an ordinary but mismatched response count can still be a new joint pattern. Covariance represents that learned relationship.</div>
-
-        <h3>Reading one dashboard candidate</h3>
-        <div class="table-wrap"><table>
-          <thead><tr><th>Displayed value</th><th>Meaning</th></tr></thead>
-          <tbody>
-            <tr><td>Source IP and window start</td><td>The host and exact time bucket whose complete feature combination was evaluated.</td></tr>
-            <tr><td>Protocol</td><td>The independent per-protocol model, such as <code>conn</code> or <code>dns</code>.</td></tr>
-            <tr><td>Raw joint distance</td><td>The actual multivariate score used in the threshold comparison.</td></tr>
-            <tr><td>Threshold</td><td>The required raw distance. A candidate exists only when distance is at least this value.</td></tr>
-            <tr><td>Normalized display score</td><td>A bounded 0–1 visualization. It is <strong>not probability, confidence, severity, or maliciousness</strong>.</td></tr>
-            <tr><td>Strongest contributing features</td><td>The feature dimensions that contributed most to joint distance. They need not be individually anomalous.</td></tr>
-            <tr><td>Shadow · no official effect</td><td>The candidate is available for investigation but did not change any official anomaly.</td></tr>
-          </tbody>
-        </table></div>
-
-        <h3>Exact calculation</h3>
-        <p>One model is maintained for each <code>(source IP, protocol)</code>. Suppose its current window contains <code>p</code> numeric features.</p>
-        <div class="formula">1. Transform each feature j:<br>yⱼ = ln(1 + max(0, xⱼ))<br><br>2. Robustly standardize it from historical windows:<br>mⱼ = median(yⱼ history)<br>sⱼ = max(0.05, 1.4826 × median(|yⱼ − mⱼ|))<br>uⱼ = (yⱼ − mⱼ) / sⱼ<br><br>3. Learn covariance C from the historical standardized vectors.<br><br>4. Regularize unstable correlations with shrinkage λ:<br>C*ⱼₖ = (1 − λ) × Cⱼₖ, when j ≠ k<br>C*ⱼⱼ = max(Cⱼⱼ, 0.05) + 0.05<br><br>5. Measure joint distance from the historical standardized mean ū:<br>δ = u_current − ū<br>D² = δᵀ (C*)⁻¹ δ<br>multivariate_score = √(D² / p)<br><br>6. Candidate decision:<br>multivariate_score ≥ multivariate_threshold</div>
-        <p>Dividing by the number of features before taking the square root makes scores more comparable across protocols with different vector sizes. Covariance shrinkage reduces unreliable off-diagonal relationships when only a small baseline is available. A shrinkage of 1 removes all correlations and leaves a variance-only model; lower values retain more learned relationships.</p>
-
-        <h3>Baseline, adaptation, and short captures</h3>
-        <div class="table-wrap"><table>
-          <thead><tr><th>Condition</th><th>Behavior</th></tr></thead>
-          <tbody>
-            <tr><td>External known-normal window</td><td>Always enters the multivariate history and cannot emit a candidate.</td></tr>
-            <tr><td>Core training-phase window</td><td>Enters history and cannot emit a multivariate candidate.</td></tr>
-            <tr><td>Fewer than <code>multivariate_minimum_points</code></td><td>The window seeds the covariance baseline. No joint distance is trusted yet.</td></tr>
-            <tr><td>Enough history</td><td>The current vector is scored against history <em>before</em> it is learned.</td></tr>
-            <tr><td>After scoring</td><td>The vector enters the rolling history. Only the most recent <code>multivariate_history_limit</code> windows are retained, so persistent behavior eventually replaces old behavior.</td></tr>
-          </tbody>
-        </table></div>
-        <p>With the defaults, the ninth observed window is the earliest possible multivariate comparison when there is no explicit training or external baseline. A one-hour capture therefore needs windows shorter than about seven minutes to provide nine continuously active windows for the same IP/protocol stream; five-minute windows provide at most twelve.</p>
-
-        <h3>Explanation and safety</h3>
-        <p>For a candidate, the module reports the protocols involved, responsible UIDs/FUIDs, and the five largest feature-distance contributions. A feature contribution is ranked by <code>|δⱼ × ((C*)⁻¹δ)ⱼ|</code>. This is an explanation of which dimensions drove joint distance; it is not a separate univariate threshold test.</p>
-        <div class="callout warn"><strong>Shadow-only evaluation:</strong> the dashboard intentionally offers only Off and Shadow for this model. Its candidate contribution is zero, it cannot create or modify a global anomaly, and every run rebuilds it from the selected capture and optional normal folders. Pipeline comparison shows where it agrees and disagrees with the locked core.</div>
-      </section>
-
       <section id="input">
         <h2>2. Input logs and cross-log correlation</h2>
         <p>The input is a folder containing Zeek TSV or JSON logs. The detector uses every supported, IP-attributable log that exists, including <code>conn</code>, <code>dns</code>, <code>http</code>, <code>files</code>, <code>ssh</code>, <code>ssl</code>, <code>dhcp</code>, <code>ntlm</code>, <code>smb_mapping</code>, <code>notice</code>, and <code>weird</code>.</p>
@@ -391,7 +350,19 @@
         <div class="formula">window_start = floor(Zeek timestamp / window_seconds) × window_seconds</div>
         <p>With a 300-second window, timestamps 0–299 belong to the first window, 300–599 to the second, and so on. For source-side behavior, each model is keyed by:</p>
         <div class="formula">(source IP, protocol, window)</div>
-        <p>A second detector view groups incoming behavior by target IP. This catches changes such as many sources or ports suddenly contacting one destination.</p>
+        <p>A second detector view groups incoming behavior by target IP. This catches changes such as many sources or ports suddenly contacting one destination. <strong>These two bucket types do not receive the same converted features.</strong> They reuse the same eligible Zeek record, but convert it according to two different questions:</p>
+        <div class="table-wrap"><table>
+          <thead><tr><th></th><th>Source-IP/protocol/time-window bucket</th><th>Destination-IP/time-window bucket</th></tr></thead>
+          <tbody>
+            <tr><td><strong>Key</strong></td><td><code>(source IP, protocol, window)</code></td><td><code>(destination IP, window)</code></td></tr>
+            <tr><td><strong>Records combined</strong></td><td>Only records from one source and one protocol.</td><td>Incoming records from every source and every supported protocol for that destination.</td></tr>
+            <tr><td><strong>Converted feature vector</strong></td><td>Common source features plus fields and derived signals specific to that protocol.</td><td>A fixed seven-feature incoming-traffic vector.</td></tr>
+            <tr><td><strong>History used for “new”</strong></td><td>Previous values known by that exact source/protocol model.</td><td>Previous sources and ports known by that destination model.</td></tr>
+            <tr><td><strong>Main question</strong></td><td>“Is this source behaving unusually in this protocol?”</td><td>“Is this destination receiving unusual traffic?”</td></tr>
+          </tbody>
+        </table></div>
+        <div class="callout"><strong>Different feature schemas, same statistical machinery:</strong> after each bucket type produces its own numeric vector, every numeric feature follows the same downstream steps: <code>ln(1+x)</code>, comparison with that feature's own history, z-score, threshold decision, and adaptation. What differs is which numeric features are produced and which records/history belong to them.</div>
+        <div class="callout good"><strong>One record, two conversions:</strong> a connection from <code>10.0.0.5</code> to <code>192.0.2.20:443</code> updates the source vector <code>(10.0.0.5, conn, window)</code> with connection features such as peer, state, bytes, packets, and scan shape. The same record updates <code>(192.0.2.20, window)</code> only as incoming volume, source, destination port, protocol, novelty, and failure information. It is not scored twice using the same vector.</div>
         <div class="grid-3">
           <div class="card"><h3>One hour</h3><p><code>window_seconds = 3600</code><br>At most one observation per continuously active IP/protocol model.</p></div>
           <div class="card"><h3>Five minutes</h3><p><code>window_seconds = 300</code><br>At most twelve observations during one hour.</p></div>
@@ -404,7 +375,8 @@
         <h2>4. Feature extraction: what is measured?</h2>
         <p>A feature is one numeric summary of a window. Each feature gets its own statistical model. Categorical values also produce <code>unique_*</code> and <code>new_*</code> counts.</p>
 
-        <h3>Common behavioral features</h3>
+        <h3>Source-IP/protocol vectors: common features</h3>
+        <p>Every source-IP/protocol vector begins with the following features. Protocol-specific fields are added afterward, so a connection vector, DNS vector, and SSH vector do not have identical columns.</p>
         <div class="table-wrap"><table>
           <thead><tr><th>Feature</th><th>Meaning</th><th>Example</th></tr></thead>
           <tbody>
@@ -417,6 +389,22 @@
             <tr><td><code>total_N</code>, <code>avg_N</code></td><td>Total and average of numeric field N.</td><td>Total response bytes and average duration.</td></tr>
           </tbody>
         </table></div>
+
+        <h3>Destination-IP vectors: a different fixed schema</h3>
+        <p>The destination view does not reuse the source/protocol vector and does not include DNS entropy, connection scan shape, HTTP URI length, SSH software, or TLS server features. Across all incoming protocols, it converts a destination window into exactly these signals:</p>
+        <div class="table-wrap"><table>
+          <thead><tr><th>Destination feature</th><th>Conversion from incoming Zeek records</th></tr></thead>
+          <tbody>
+            <tr><td><code>incoming_flow_count</code></td><td>Number of incoming supported records for this destination in the window.</td></tr>
+            <tr><td><code>unique_sources</code></td><td>Number of distinct source IPs.</td></tr>
+            <tr><td><code>new_sources</code></td><td>Sources not previously known by this destination model.</td></tr>
+            <tr><td><code>unique_ports</code></td><td>Number of distinct destination ports.</td></tr>
+            <tr><td><code>new_ports</code></td><td>Destination ports not previously known by this destination model.</td></tr>
+            <tr><td><code>unique_protocols</code></td><td>Number of represented Zeek protocol logs, such as connection, DNS, HTTP, or SSH.</td></tr>
+            <tr><td><code>failure_ratio</code></td><td>Records satisfying their own protocol's failure rule divided by all incoming records.</td></tr>
+          </tbody>
+        </table></div>
+        <div class="formula">same Zeek records + source/protocol conversion → source/protocol feature vector<br>same Zeek records + destination conversion → destination feature vector<br>each feature in each vector → its own independent statistical history and z-score</div>
 
         <h3>Protocol-specific feature examples</h3>
         <div class="grid-2">
@@ -481,29 +469,76 @@
         <p>When fewer than seven historical values are retained, the detector uses distance from the mean divided by the larger of standard deviation or the learned noise floor. With seven or more values, it uses the median and median absolute deviation (MAD), which are more resistant to outliers.</p>
         <div class="formula">robust_std = max(1.4826 × MAD, minimum_noise_floor)<br>z = |current_transformed_value − historical_median| / robust_std</div>
 
-        <h3>What exactly is the adaptive minimum noise floor?</h3>
-        <p>The noise floor is a lower bound on the denominator of the z-score. It answers: <strong>“Even when the historical values look almost identical, how much ordinary small movement should this feature tolerate?”</strong> It is stored separately inside every feature model and operates in transformed <code>ln(1+x)</code> space.</p>
-        <div class="callout warn"><strong>The problem it prevents:</strong> suppose historical dispersion is only 0.002 and the current value differs by 0.03. Without a floor, <code>z = 0.03 / 0.002 = 15</code>, an extreme anomaly caused by a very small change. With a floor of 0.1, <code>z = 0.03 / 0.1 = 0.3</code>. The floor prevents nearly constant training data, rounding, or harmless jitter from creating unstable scores.</div>
-
-        <h3>How the floor is computed</h3>
-        <p>Before an observation updates the mean, the detector measures its absolute residual against the old mean:</p>
-        <div class="formula">residual r = |current transformed value y − mean before update|</div>
-        <p>It keeps the most recent 64 residuals. Until at least five residuals exist, the floor remains at its initial value of <code>0.1</code>. After that, it calculates:</p>
-        <div class="formula">q10 = 10th percentile of recent residuals<br>residual_median = median(recent residuals)<br>residual_MAD = median(|each residual − residual_median|)<br>candidate_floor = max(0.01, q10, 1.4826 × residual_MAD)<br>new_floor = 0.95 × old_floor + 0.05 × candidate_floor</div>
+        <h3>What is a z-score?</h3>
+        <p>A z-score measures distance using the model's normal amount of variation as the unit. Subtracting the mean gives the ordinary distance from normal. Dividing by standard deviation answers: “How many standard deviations fit inside that distance?”</p>
+        <div class="formula">signed z-score = (current value − historical mean) / historical standard deviation<br>anomaly distance = |signed z-score|</div>
         <div class="table-wrap"><table>
-          <thead><tr><th>Term</th><th>Why it participates</th></tr></thead>
+          <thead><tr><th>Signed z-score</th><th>Meaning</th></tr></thead>
           <tbody>
-            <tr><td><code>0.01</code></td><td>Absolute safety minimum in transformed space. The denominator can never collapse to zero.</td></tr>
-            <tr><td><code>q10</code></td><td>A low percentile of actual recent errors. It estimates a small but repeatedly observed background mismatch while resisting a few very large outliers.</td></tr>
-            <tr><td><code>1.4826 × residual_MAD</code></td><td>A robust estimate of how variable the residuals themselves are. It grows when ordinary prediction errors have a wider spread.</td></tr>
-            <tr><td><code>max(...)</code></td><td>Chooses the most conservative of the three protections, ensuring the denominator is not unrealistically small.</td></tr>
-            <tr><td><code>0.95 old + 0.05 candidate</code></td><td>Moves only 5% toward the new candidate each observation, so the floor adapts gradually instead of jumping because of one window.</td></tr>
+            <tr><td><code>0</code></td><td>The current value equals the historical mean.</td></tr>
+            <tr><td><code>+1</code></td><td>The value is one standard deviation above the mean.</td></tr>
+            <tr><td><code>−2</code></td><td>The value is two standard deviations below the mean.</td></tr>
+            <tr><td><code>|z| = 3.5</code></td><td>The distance between the current value and the mean is 3.5 times the historical standard deviation, regardless of whether the value is higher or lower.</td></tr>
           </tbody>
         </table></div>
-        <p>During scoring, this floor competes with the dispersion estimated from historical feature values:</p>
-        <div class="formula">fewer than 7 retained values: denominator = max(standard deviation, noise floor)<br>7 or more retained values: denominator = max(1.4826 × feature MAD, noise floor)</div>
-        <p>If normal traffic is genuinely noisy, recent residuals can raise the floor and reduce false positives. If traffic becomes steadier, the floor can decrease, but only gradually and never below 0.01. Because suspicious observations also produce residuals, persistent changed behavior can eventually affect the floor; the short 64-residual buffer, robust percentiles/MAD, and 5% update rate limit the effect of isolated spikes.</p>
-        <div class="callout"><strong>How to interpret 0.1:</strong> it is not “0.1 packets” or “0.1 bytes.” It is 0.1 in logarithmic space. A log-space difference of 0.1 corresponds approximately to a factor of <code>e^0.1 ≈ 1.105</code> in <code>1+x</code>, or roughly a 10.5% multiplicative difference near the current scale.</div>
+        <p>Example: if the mean is 100, standard deviation is 15, and the current value is 130, then <code>z = (130 − 100) / 15 = 2</code>. The value is two standard deviations above normal.</p>
+
+        <div class="z-demo">
+          <h3>Interactive z-score plot</h3>
+          <p>Set the historical mean and standard deviation, then move the current value. The curve represents the learned normal distribution. The colored line is the current observation.</p>
+          <div class="z-controls">
+            <label>Historical mean μ<input id="zMean" type="number" step="1" value="100"></label>
+            <label>Historical standard deviation σ<input id="zStd" type="number" min="0.001" step="1" value="15"></label>
+            <label>Example alert threshold |z|<input id="zThreshold" type="number" min="0.1" step="0.1" value="3.5"></label>
+          </div>
+          <label class="z-slider">Move the current value x
+            <input id="zValue" type="range" min="25" max="175" step="0.5" value="130">
+          </label>
+          <label>Or enter the current value exactly<input id="zValueNumber" type="number" step="0.5" value="130"></label>
+          <svg id="zPlot" class="z-plot" viewBox="0 0 900 280" role="img" aria-label="Interactive normal curve showing mean, standard deviations, and current value"></svg>
+          <div id="zResult" class="z-result" aria-live="polite"></div>
+          <div class="callout"><strong>Connection to this detector:</strong> this plot teaches the ordinary mean/standard-deviation z-score. The detector applies the same “distance divided by normal spread” idea after <code>ln(1+x)</code>. Once enough history exists, it substitutes the more outlier-resistant median and scaled MAD, and it also enforces the adaptive noise floor.</div>
+        </div>
+
+        <h3>What exactly is the adaptive minimum noise floor?</h3>
+        <div class="callout"><strong>Concrete definition:</strong> the noise floor is one positive number stored inside each individual feature model. In the code it is named <code>minimum_std</code>. It starts at <code>0.1</code> and is measured in transformed <code>ln(1+x)</code> units. It is not a feature value, anomaly threshold, packet count, or standard deviation calculated from the feature values. It is the smallest denominator that the z-score is allowed to use.</div>
+
+        <h3>What does “dispersion” mean, and dispersion of what?</h3>
+        <p><strong>“Dispersion” is only a statistics term for spread.</strong> It means how far the numbers in one named list lie from that list's center. In this detector, the list is the retained transformed values of one exact feature in one exact model—not all traffic, not all features, and not anomaly scores. The guide uses the clearer word <strong>spread</strong> below.</p>
+        <p>For example, the DNS <code>flow_count</code> model for source <code>10.0.0.5</code> may retain these transformed values from previous windows:</p>
+        <div class="formula">recent transformed feature values = [2.30, 2.32, 2.31, 2.33, 2.30, 2.32, 2.31]</div>
+        <p>Those numbers are tightly grouped around approximately <code>2.31</code>, so their spread is small. The detector calculates that spread from this exact list:</p>
+        <div class="formula">center = median(recent transformed feature values)<br>feature_MAD = median(|each transformed feature value − center|)<br>feature spread = 1.4826 × feature_MAD</div>
+        <p>With fewer than seven retained values, it instead uses the running standard deviation, which is the square root of the running variance. Therefore, the measured spread always belongs to the previous transformed values of the one feature currently being scored. For example, while scoring DNS <code>flow_count</code> for <code>10.0.0.5</code>, it does not use the values of DNS entropy, another source, or another protocol.</p>
+
+        <h3>The noise floor uses a second, different list</h3>
+        <p>The feature-value list above estimates how much the feature itself has varied. The noise floor is learned from a separate list of <strong>residuals</strong>. A residual is the model's prediction error immediately before the current observation is learned:</p>
+        <div class="formula">y = ln(1 + current raw feature value)<br>old_mean = feature model's mean before updating with y<br>residual = |y − old_mean|</div>
+        <p>Example: if the transformed current value is <code>2.35</code> and the mean before updating is <code>2.31</code>, the stored residual is:</p>
+        <div class="formula">residual = |2.35 − 2.31| = 0.04</div>
+        <p>The model retains at most the latest 64 residuals for that same feature model. The first observation has no previous mean, so it cannot create a residual. Until five residuals exist, the noise floor stays exactly at its initial value of <code>0.1</code>.</p>
+
+        <h3>Exact noise-floor calculation</h3>
+        <div class="formula">q10 = 10th percentile of the recent residual list<br>residual_center = median(recent residual list)<br>residual_MAD = median(|each residual − residual_center|)<br>candidate_floor = max(0.01, q10, 1.4826 × residual_MAD)<br>new_noise_floor = 0.95 × old_noise_floor + 0.05 × candidate_floor</div>
+        <p>Suppose the model has these five recent residuals:</p>
+        <div class="formula">residuals = [0.02, 0.04, 0.03, 0.05, 0.02]<br>sorted residuals = [0.02, 0.02, 0.03, 0.04, 0.05]<br>q10 = 0.02<br>residual_center = median(...) = 0.03<br>distances from residual center = [0.01, 0.01, 0.00, 0.02, 0.01]<br>residual_MAD = median([0.00, 0.01, 0.01, 0.01, 0.02]) = 0.01<br>1.4826 × residual_MAD = 0.014826<br>candidate_floor = max(0.01, 0.02, 0.014826) = 0.02<br>old_noise_floor = 0.10<br>new_noise_floor = 0.95 × 0.10 + 0.05 × 0.02 = 0.096</div>
+        <p>The floor does not jump directly from <code>0.10</code> to <code>0.02</code>. One update moves it only 5% toward the candidate, producing <code>0.096</code>. Repeated small residuals can continue lowering it gradually; larger residual patterns can raise it.</p>
+
+        <div class="calculator">
+          <h3>Interactive noise-floor calculation</h3>
+          <p>Enter the residuals already stored by one feature model and its current floor.</p>
+          <div class="calc-grid">
+            <label style="grid-column:span 3">Recent residuals, comma separated<input id="floorResiduals" type="text" value="0.02, 0.04, 0.03, 0.05, 0.02"></label>
+            <label>Old noise floor<input id="oldNoiseFloor" type="number" min="0" step="0.001" value="0.1"></label>
+          </div>
+          <div id="floorResult" class="calc-output" aria-live="polite"></div>
+        </div>
+
+        <h3>Where the floor enters the z-score</h3>
+        <p>The detector calculates feature spread from the recent transformed feature-value list, then prevents that spread from becoming smaller than the separately learned noise floor:</p>
+        <div class="formula">fewer than 7 feature values:<br>z denominator = max(running standard deviation, noise floor)<br><br>7 or more feature values:<br>z denominator = max(1.4826 × feature MAD, noise floor)<br><br>z = |current transformed value − historical center| / z denominator</div>
+        <div class="callout warn"><strong>Why this matters:</strong> if feature spread is <code>0.002</code> and the current transformed value is only <code>0.03</code> from the center, division by <code>0.002</code> gives <code>z = 15</code>. If the noise floor is <code>0.1</code>, the denominator becomes <code>max(0.002, 0.1) = 0.1</code>, so <code>z = 0.03 / 0.1 = 0.3</code>. The floor prevents nearly identical historical values from turning tiny numerical movement into an enormous score.</div>
+        <div class="callout"><strong>Units:</strong> a floor of <code>0.1</code> is not 0.1 packets or bytes. It is 0.1 after <code>ln(1+x)</code>. A log-space difference of 0.1 corresponds approximately to a factor of <code>e^0.1 ≈ 1.105</code> in <code>1+x</code>.</div>
 
         <h3>Step C — compare with the effective threshold</h3>
         <p>After at least ten benign training values, the detector can calibrate the threshold from the configured benign quantile. Otherwise, it uses the configured fallback threshold.</p>
@@ -522,7 +557,7 @@
             <tr><td><code>x</code></td><td>The raw feature measured in the current window, such as 50 DNS records.</td><td>Equation 1 transforms it into <code>y</code>.</td></tr>
             <tr><td><code>y</code></td><td><code>ln(1+x)</code> for the current raw feature.</td><td>Equation 4 compares it with historical normal.</td></tr>
             <tr><td><code>m</code></td><td>Median of retained historical transformed values: <code>median(y₁…yₙ)</code>.</td><td>Equation 4 calculates current deviation.</td></tr>
-            <tr><td><code>d</code></td><td>Historical MAD: <code>median(|yᵢ−m|)</code>.</td><td>Equation 2 estimates robust historical spread.</td></tr>
+            <tr><td><code>d</code></td><td>MAD of this feature's retained transformed values: <code>median(|yᵢ−m|)</code>.</td><td>Equation 2 converts that exact list's MAD into a standard-deviation-like value.</td></tr>
             <tr><td><code>f</code></td><td>Adaptive lower bound on normal spread. It starts at 0.1 and moves 5% toward <code>max(0.01, residual q10, 1.4826 × residual MAD)</code> after each observation once five residuals exist.</td><td>Equation 3 stops a tiny MAD from creating an extreme score.</td></tr>
             <tr><td><code>T</code></td><td>Empirically calibrated benign threshold when enough training values exist; otherwise the configured fallback.</td><td>Equation 6 sets the decision boundary.</td></tr>
             <tr><td><code>S</code></td><td>The configured global sensitivity.</td><td>Equation 6 divides the threshold; larger S means easier detection.</td></tr>
@@ -640,6 +675,56 @@
         <div class="callout good"><strong>Example:</strong> DNS contributes 0.30, HTTP contributes 0.30, and the second component adds 0.15. The global score is 0.75. If the responsible DNS and HTTP records share one exact UID, the default UID bonus adds 0.10, raising it to 0.85.</div>
       </section>
 
+      <section id="multivariate">
+        <h2>Experimental multivariate feature-relationship detector</h2>
+        <div class="callout"><strong>This method comes after the statistical detector.</strong> Everything above—feature conversion, per-feature z-scores, adaptation, and the global ensemble—is the locked statistical core that creates official anomalies. The method below is a separate experimental model running in Shadow mode.</div>
+        <p>The core asks whether each converted feature is unusual separately. The multivariate model asks whether the <strong>combination</strong> and relationship among the converted features is unusual. Version 1 receives only the vectors produced for <code>(source IP, protocol, time window)</code>. It does not receive destination-window vectors or individual TLS flow alerts.</p>
+        <h3>Plain-language process</h3>
+        <div class="pipeline">
+          <div class="step"><span class="step-num">1</span><h3>Receive a converted row</h3><p>The ordinary source/protocol bucket has already converted its Zeek records into one numeric feature vector.</p></div>
+          <div class="step"><span class="step-num">2</span><h3>Learn relationships</h3><p>Earlier vectors teach which features normally rise, fall, or remain stable together.</p></div>
+          <div class="step"><span class="step-num">3</span><h3>Measure the new vector</h3><p>The model calculates one raw joint distance from the learned feature pattern.</p></div>
+          <div class="step"><span class="step-num">4</span><h3>Suggest only</h3><p>If distance reaches the threshold, a Shadow candidate appears. Official anomalies remain unchanged.</p></div>
+        </div>
+        <div class="callout good"><strong>Example:</strong> a DNS window's query count and response count can each fall inside their ordinary ranges. If those two values normally rise and fall together, an ordinary query count combined with an ordinary but mismatched response count can still be a new joint pattern. Covariance represents that learned relationship.</div>
+
+        <h3>Reading one dashboard candidate</h3>
+        <div class="table-wrap"><table>
+          <thead><tr><th>Displayed value</th><th>Meaning</th></tr></thead>
+          <tbody>
+            <tr><td>Source IP and window start</td><td>The host and exact time bucket whose complete feature combination was evaluated.</td></tr>
+            <tr><td>Protocol</td><td>The independent per-protocol model, such as <code>conn</code> or <code>dns</code>.</td></tr>
+            <tr><td>Raw joint distance</td><td>The actual multivariate score used in the threshold comparison.</td></tr>
+            <tr><td>Threshold</td><td>The required raw distance. A candidate exists only when distance is at least this value.</td></tr>
+            <tr><td>Normalized display score</td><td>A bounded 0–1 visualization. It is <strong>not probability, confidence, severity, or maliciousness</strong>.</td></tr>
+            <tr><td>Strongest contributing features</td><td>The feature dimensions that contributed most to joint distance. They need not be individually anomalous.</td></tr>
+            <tr><td>Shadow · no official effect</td><td>The candidate is available for investigation but did not change any official anomaly.</td></tr>
+          </tbody>
+        </table></div>
+
+        <h3>Exact calculation</h3>
+        <p>One model is maintained for each <code>(source IP, protocol)</code>. Suppose its current window contains <code>p</code> numeric features.</p>
+        <div class="formula">1. Transform each feature j:<br>yⱼ = ln(1 + max(0, xⱼ))<br><br>2. Robustly standardize it from historical windows:<br>mⱼ = median(yⱼ history)<br>sⱼ = max(0.05, 1.4826 × median(|yⱼ − mⱼ|))<br>uⱼ = (yⱼ − mⱼ) / sⱼ<br><br>3. Learn covariance C from the historical standardized vectors.<br><br>4. Regularize unstable correlations with shrinkage λ:<br>C*ⱼₖ = (1 − λ) × Cⱼₖ, when j ≠ k<br>C*ⱼⱼ = max(Cⱼⱼ, 0.05) + 0.05<br><br>5. Measure joint distance from the historical standardized mean ū:<br>δ = u_current − ū<br>D² = δᵀ (C*)⁻¹ δ<br>multivariate_score = √(D² / p)<br><br>6. Candidate decision:<br>multivariate_score ≥ multivariate_threshold</div>
+        <p>Dividing by the number of features before taking the square root makes scores more comparable across protocols with different vector sizes. Covariance shrinkage reduces unreliable off-diagonal relationships when only a small baseline is available. A shrinkage of 1 removes all correlations and leaves a variance-only model; lower values retain more learned relationships.</p>
+
+        <h3>Baseline, adaptation, and short captures</h3>
+        <div class="table-wrap"><table>
+          <thead><tr><th>Condition</th><th>Behavior</th></tr></thead>
+          <tbody>
+            <tr><td>External known-normal window</td><td>Always enters the multivariate history and cannot emit a candidate.</td></tr>
+            <tr><td>Core training-phase window</td><td>Enters history and cannot emit a multivariate candidate.</td></tr>
+            <tr><td>Fewer than <code>multivariate_minimum_points</code></td><td>The window seeds the covariance baseline. No joint distance is trusted yet.</td></tr>
+            <tr><td>Enough history</td><td>The current vector is scored against history <em>before</em> it is learned.</td></tr>
+            <tr><td>After scoring</td><td>The vector enters the rolling history. Only the most recent <code>multivariate_history_limit</code> windows are retained, so persistent behavior eventually replaces old behavior.</td></tr>
+          </tbody>
+        </table></div>
+        <p>With the defaults, the ninth observed window is the earliest possible multivariate comparison when there is no explicit training or external baseline. A one-hour capture therefore needs windows shorter than about seven minutes to provide nine continuously active windows for the same IP/protocol stream; five-minute windows provide at most twelve.</p>
+
+        <h3>Explanation and safety</h3>
+        <p>For a candidate, the module reports the protocols involved, responsible UIDs/FUIDs, and the five largest feature-distance contributions. A feature contribution is ranked by <code>|δⱼ × ((C*)⁻¹δ)ⱼ|</code>. This is an explanation of which dimensions drove joint distance; it is not a separate univariate threshold test.</p>
+        <div class="callout warn"><strong>Shadow-only evaluation:</strong> the dashboard intentionally offers only Off and Shadow for this model. Its candidate contribution is zero, it cannot create or modify a global anomaly, and every run rebuilds it from the selected capture and optional normal folders. Pipeline comparison shows where it agrees and disagrees with the locked core.</div>
+      </section>
+
       <section id="attribution">
         <h2>10. Why did the detector alert?</h2>
         <p>The detector stores reasons and responsible records rather than returning only a score. Attribution is feature-aware:</p>
@@ -703,6 +788,102 @@
   <script>
     const calculatorInputs = ["rawCurrent", "median", "mad", "floor", "threshold", "sensitivity"];
 
+    function updateZPlot(source) {
+      const finite = (value, fallback) => Number.isFinite(Number(value)) ? Number(value) : fallback;
+      const mean = finite(document.getElementById("zMean").value, 0);
+      const std = Math.max(0.001, finite(document.getElementById("zStd").value, 1));
+      const threshold = Math.max(0.1, finite(document.getElementById("zThreshold").value, 3.5));
+      const slider = document.getElementById("zValue");
+      const numberInput = document.getElementById("zValueNumber");
+      const requestedCurrent = finite(numberInput.value, mean);
+      if (source !== "slider" && source !== "number") {
+        slider.min = String(mean - 5 * std);
+        slider.max = String(mean + 5 * std);
+        slider.step = String(Math.max(0.001, std / 30));
+        const bounded = Math.min(mean + 5 * std, Math.max(mean - 5 * std, requestedCurrent));
+        slider.value = String(bounded);
+        numberInput.value = String(bounded);
+      } else if (source === "slider") {
+        numberInput.value = slider.value;
+      } else {
+        slider.min = String(Math.min(mean - 5 * std, requestedCurrent));
+        slider.max = String(Math.max(mean + 5 * std, requestedCurrent));
+        slider.value = String(requestedCurrent);
+      }
+      const current = finite(numberInput.value, mean);
+      const signedZ = (current - mean) / std;
+      const absoluteZ = Math.abs(signedZ);
+      const anomaly = absoluteZ >= threshold;
+      const span = Math.max(4, absoluteZ + 0.6, threshold + 0.3);
+      const minimum = mean - span * std;
+      const maximum = mean + span * std;
+      const left = 55, right = 865, baseline = 215, peak = 155;
+      const x = value => left + ((value - minimum) / (maximum - minimum)) * (right - left);
+      const curve = Array.from({length: 181}, (_, index) => {
+        const value = minimum + (maximum - minimum) * index / 180;
+        const z = (value - mean) / std;
+        return `${x(value).toFixed(2)},${(baseline - Math.exp(-0.5 * z * z) * peak).toFixed(2)}`;
+      }).join(" ");
+      const guides = Array.from({length: 7}, (_, index) => index - 3).map(z => {
+        const position = x(mean + z * std);
+        const label = z === 0 ? "mean" : `${z > 0 ? "+" : ""}${z}σ`;
+        return `<line x1="${position}" y1="48" x2="${position}" y2="220" stroke="${z === 0 ? "#225ea8" : "#cad5e4"}" stroke-dasharray="${z === 0 ? "0" : "4 4"}"/><text x="${position}" y="242" text-anchor="middle" fill="#51627a">${label}</text>`;
+      }).join("");
+      const thresholdLeft = x(mean - threshold * std);
+      const thresholdRight = x(mean + threshold * std);
+      const currentX = x(current);
+      const currentY = baseline - Math.exp(-0.5 * signedZ * signedZ) * peak;
+      document.getElementById("zPlot").innerHTML =
+        `<rect x="${left}" y="35" width="${Math.max(0, thresholdLeft-left)}" height="180" fill="#fee2e2" opacity=".65"/>` +
+        `<rect x="${thresholdRight}" y="35" width="${Math.max(0, right-thresholdRight)}" height="180" fill="#fee2e2" opacity=".65"/>` +
+        guides + `<line x1="${left}" y1="${baseline}" x2="${right}" y2="${baseline}" stroke="#6f8097"/>` +
+        `<polyline points="${curve}" fill="none" stroke="#3878c7" stroke-width="4"/>` +
+        `<line x1="${currentX}" y1="${currentY}" x2="${currentX}" y2="${baseline}" stroke="${anomaly ? "#dc2626" : "#7c3aed"}" stroke-width="4"/>` +
+        `<circle cx="${currentX}" cy="${currentY}" r="7" fill="${anomaly ? "#dc2626" : "#7c3aed"}"/>` +
+        `<text x="${currentX}" y="${Math.max(22,currentY-13)}" text-anchor="middle" fill="${anomaly ? "#991b1b" : "#5b21b6"}" font-weight="800">x = ${current.toFixed(2)}</text>` +
+        `<text x="${left}" y="268" fill="#51627a">${minimum.toFixed(2)}</text><text x="${right}" y="268" text-anchor="end" fill="#51627a">${maximum.toFixed(2)}</text>`;
+      const direction = signedZ > 0 ? "above" : signedZ < 0 ? "below" : "at";
+      document.getElementById("zResult").innerHTML =
+        `<div>Ordinary distance<strong>${(current-mean).toFixed(4)}</strong>x − μ</div>` +
+        `<div>Signed z-score<strong>${signedZ.toFixed(4)}</strong>${absoluteZ.toFixed(4)} standard deviations ${direction} the mean</div>` +
+        `<div>Decision<strong class="${anomaly ? "higher" : ""}">${anomaly ? "Threshold crossed" : "Below threshold"}</strong>|z| = ${absoluteZ.toFixed(4)} ${anomaly ? "≥" : "<"} ${threshold.toFixed(4)}</div>`;
+    }
+
+    function interpolatedQuantile(values, fraction) {
+      const ordered = [...values].sort((left, right) => left - right);
+      const position = Math.max(0, Math.min(1, fraction)) * (ordered.length - 1);
+      const low = Math.floor(position), high = Math.ceil(position);
+      if (low === high) return ordered[low];
+      const weight = position - low;
+      return ordered[low] * (1 - weight) + ordered[high] * weight;
+    }
+
+    function updateFloorCalculator() {
+      const residuals = document.getElementById("floorResiduals").value.split(",")
+        .map(value => Number(value.trim())).filter(value => Number.isFinite(value) && value >= 0).slice(-64);
+      const oldFloorInput = Number(document.getElementById("oldNoiseFloor").value);
+      const oldFloor = Number.isFinite(oldFloorInput) ? Math.max(0, oldFloorInput) : 0.1;
+      const output = document.getElementById("floorResult");
+      if (residuals.length < 5) {
+        output.innerHTML = `<div class="callout warn"><strong>${residuals.length} valid residuals:</strong> at least five are required. The code returns without updating, so the noise floor remains ${oldFloor.toFixed(6)}.</div>`;
+        return;
+      }
+      const q10 = interpolatedQuantile(residuals, 0.10);
+      const center = interpolatedQuantile(residuals, 0.50);
+      const distances = residuals.map(value => Math.abs(value - center));
+      const mad = interpolatedQuantile(distances, 0.50);
+      const scaledMad = 1.4826 * mad;
+      const candidate = Math.max(0.01, q10, scaledMad);
+      const updated = 0.95 * oldFloor + 0.05 * candidate;
+      output.innerHTML = `<h4>Exact result</h4><div class="equation-trace">
+        <div class="equation-step"><span class="eq-number">1</span><div><div class="eq-title">Residual list used</div><div class="eq-formula">[${residuals.map(value => value.toFixed(6)).join(", ")}]</div><div class="eq-meaning">${residuals.length} values; only the latest 64 are retained.</div></div></div>
+        <div class="equation-step"><span class="eq-number">2</span><div><div class="eq-title">Low recurring error</div><div class="eq-formula">q10 = ${q10.toFixed(6)}</div></div></div>
+        <div class="equation-step"><span class="eq-number">3</span><div><div class="eq-title">Spread of the residual list</div><div class="eq-formula">residual median = ${center.toFixed(6)}<br>residual MAD = ${mad.toFixed(6)}<br>1.4826 × MAD = ${scaledMad.toFixed(6)}</div></div></div>
+        <div class="equation-step"><span class="eq-number">4</span><div><div class="eq-title">Candidate lower bound</div><div class="eq-formula">candidate = max(0.01, ${q10.toFixed(6)}, ${scaledMad.toFixed(6)}) = ${candidate.toFixed(6)}</div></div></div>
+        <div class="equation-step final"><span class="eq-number">5</span><div><div class="eq-title">Gradual floor update</div><div class="eq-formula">new floor = 0.95 × ${oldFloor.toFixed(6)} + 0.05 × ${candidate.toFixed(6)} = ${updated.toFixed(6)}</div></div></div>
+      </div>`;
+    }
+
     function updateCalculator() {
       const value = Object.fromEntries(calculatorInputs.map(id => [id, Number(document.getElementById(id).value)]));
       const current = Math.log1p(Math.max(0, value.rawCurrent));
@@ -732,7 +913,7 @@
         `<div class="eq-meaning">Inputs used: transformed current value <strong>y</strong> and historical median <strong>m</strong>.</div></div></div>` +
         `<div class="equation-step"><span class="eq-number">5</span><div><div class="eq-title">Standardize the deviation</div>` +
         `<div class="eq-formula">z = deviation / robust_std = ${deviation.toFixed(4)} / ${robustStd.toFixed(4)} = ${z.toFixed(4)}</div>` +
-        `<div class="eq-meaning">The z-score says how many robust historical spreads separate the current value from the median.</div></div></div>` +
+        `<div class="eq-meaning">The z-score is the current distance from this feature's historical median divided by the larger of: (a) 1.4826 times this feature's historical MAD, or (b) this feature model's noise floor.</div></div></div>` +
         `<div class="equation-step"><span class="eq-number">6</span><div><div class="eq-title">Apply sensitivity to the threshold</div>` +
         `<div class="eq-formula">effective_threshold = T / S = ${value.threshold.toFixed(4)} / ${Math.max(0.01, value.sensitivity).toFixed(4)} = ${effective.toFixed(4)}</div>` +
         `<div class="eq-meaning">Inputs used: base threshold <strong>T</strong> and sensitivity <strong>S</strong>. Higher sensitivity lowers the required threshold.</div></div></div>` +
@@ -743,6 +924,15 @@
     }
 
     calculatorInputs.forEach(id => document.getElementById(id).addEventListener("input", updateCalculator));
+    document.getElementById("zMean").addEventListener("input", () => updateZPlot("model"));
+    document.getElementById("zStd").addEventListener("input", () => updateZPlot("model"));
+    document.getElementById("zThreshold").addEventListener("input", () => updateZPlot("threshold"));
+    document.getElementById("zValue").addEventListener("input", () => updateZPlot("slider"));
+    document.getElementById("zValueNumber").addEventListener("input", () => updateZPlot("number"));
+    document.getElementById("floorResiduals").addEventListener("input", updateFloorCalculator);
+    document.getElementById("oldNoiseFloor").addEventListener("input", updateFloorCalculator);
+    updateZPlot("model");
+    updateFloorCalculator();
     updateCalculator();
   </script>
 </body>
