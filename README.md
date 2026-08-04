@@ -38,19 +38,19 @@ difference of zero. A future detector can use the same table to show overlap,
 core-only decisions, module-only decisions, and score differences. The core is
 a reference in this display, not assumed ground truth.
 
-The first independent experimental detector is **Robust multivariate feature
-relationships**. For each source-IP/protocol stream it learns a regularized
-covariance matrix over the complete transformed feature vector and scores new
-windows with dimension-normalized robust Mahalanobis distance. This can detect
-an unusual combination of individually ordinary values. It runs in Shadow by
-default and is deliberately restricted to **Off** or **Shadow**: its candidates
-are visible in Pipeline comparison but cannot alter core anomalies. It requires
-no NumPy, scikit-learn, model download, or external API.
+Six independent optional detectors are available after the statistical core:
+robust multivariate relationships, PCA reconstruction, Isolation Forest,
+empirical rarity/novelty, rolling time-series change, and communication-graph
+behavior. The first five analyze source-IP/protocol streams and destination-IP
+streams; the graph detector analyzes each source IP's contacted destinations
+across all protocols.
 
-In the dashboard, only the locked statistical core is **Active**. **Shadow**
-means a safe dry run with zero official effect; **Off** means the module is not
-executed. The normalized multivariate display score is not a probability or
-confidence value—the raw joint distance is what is compared with the threshold.
+Every real detector can be **Off**, **Shadow**, or **Active** from the dashboard.
+Shadow computes candidates with zero official effect. Active may add a
+module-only candidate to the official anomaly set or annotate a matching core
+anomaly. Active modules never remove, lower, or replace core anomalies. All
+methods are local pure-Python implementations: no model download or external
+API is required.
 
 The left-side importance controls filter low/medium/high/critical anomalies
 and change ranking between composite importance, total anomaly score,
