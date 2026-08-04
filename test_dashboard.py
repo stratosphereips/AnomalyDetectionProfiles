@@ -70,6 +70,8 @@ class DashboardTests(unittest.TestCase):
         self.assertIn("Responsible flows", html)
         self.assertIn("scopedFeature", html)
         self.assertIn("Timeline graphs", html)
+        self.assertIn('class="tab active" data-tab="graphs"', html)
+        self.assertIn('tab: "graphs"', html)
         self.assertIn("Training, drift, and anomaly timeline", html)
         self.assertIn("Minimum level", html)
         self.assertIn("Composite importance", html)
