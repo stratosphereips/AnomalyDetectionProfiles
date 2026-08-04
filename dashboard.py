@@ -114,6 +114,11 @@ SETTING_METADATA = {
     "ssl_novelty_threshold": ("SSL novelty threshold", "Gate for new server and JA3S evidence."),
     "ssl_baseline_alpha": ("SSL baseline adaptation", "EWMA rate for normal SSL flows."),
     "ssl_max_small_anomalies": ("SSL small-reason limit", "Maximum reasons still treated as small flow drift."),
+    "experimental_noop_mode": (
+        "No-op module mode",
+        "Off does not execute it. Shadow executes it but cannot affect detection. "
+        "Active permits a contribution, but this validation module always contributes zero.",
+    ),
 }
 
 
@@ -497,6 +502,11 @@ def run_detector(payload: dict[str, Any]) -> dict[str, Any]:
         "capture": inspect_zeek_folder(str(zeek_dir), window_seconds),
         "model_updates": [
             event for event in events if event.get("event") == "model_update"
+        ],
+        "module_results": [
+            event
+            for event in events
+            if event.get("event") == "experimental_module_result"
         ],
         "flow_anomalies": flow_anomalies,
         "protocol_anomalies": protocol_anomalies,
