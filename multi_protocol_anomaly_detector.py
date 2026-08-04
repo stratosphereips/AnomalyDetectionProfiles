@@ -15,6 +15,12 @@ from typing import Any, Callable, Optional
 
 from configuration import load_settings
 from detection_core import AdaptiveStats, ZeekReader, clean, number
+from experimental_pipeline import (
+    ExperimentalPipeline,
+    NoOpModule,
+    PipelineContext,
+    pipeline_summary,
+)
 from reporting import Reporter
 
 
@@ -56,6 +62,7 @@ MULTI_DEFAULTS = {
     "ssl_novelty_threshold": 1.5,
     "ssl_baseline_alpha": 0.10,
     "ssl_max_small_anomalies": 2,
+    "experimental_noop_mode": "off",
 }
 
 # Protocol-specific categorical novelty, numeric volume, and failure signals.
@@ -2315,6 +2322,15 @@ def parser(
         default=settings["ssl_max_small_anomalies"],
     )
     result.add_argument(
+        "--experimental-noop-mode",
+        choices=("off", "shadow", "active"),
+        default=settings["experimental_noop_mode"],
+        help=(
+            "no-op experimental pipeline module: off, shadow (compute without "
+            "influence), or active (eligible to influence; this no-op contributes zero)"
+        ),
+    )
+    result.add_argument(
         "-q", "--quiet", action="store_true", default=settings["quiet"]
     )
     result.add_argument(
@@ -2405,6 +2421,7 @@ def main(argv: Optional[list[str]] = None) -> int:
             "window_seconds": args.window_seconds,
             "normal_dirs": [str(path) for path in args.normal_dirs],
             "sensitivity": args.sensitivity,
+            "experimental_noop_mode": args.experimental_noop_mode,
         },
     )
     try:
@@ -2440,6 +2457,24 @@ def main(argv: Optional[list[str]] = None) -> int:
         )
         process_observations(detector, observations)
         global_events = detector.ensemble()
+        module_results = ExperimentalPipeline(
+            [(NoOpModule(), args.experimental_noop_mode)]
+        ).run(
+            PipelineContext(
+                records_processed=sum(detector.records_by_protocol.values()),
+                window_seconds=args.window_seconds,
+                protocols=tuple(protocol for protocol, _ in logs),
+                protocol_anomalies=len(detector.protocol_anomalies),
+                target_anomalies=len(detector.target_anomalies),
+                ssl_flow_alerts=len(detector.flow_anomalies),
+                global_anomalies=len(global_events),
+            )
+        )
+        for module_result in module_results:
+            output.write(
+                "events",
+                {"event": "experimental_module_result", **module_result.to_dict()},
+            )
         summary = {
             "window_seconds": args.window_seconds,
             "training_windows": args.training_hours,
@@ -2456,6 +2491,7 @@ def main(argv: Optional[list[str]] = None) -> int:
             "global_anomalies": len(global_events),
             "hosts": len({host for host, _ in detector.states}),
             "targets": len(detector.target_states),
+            "pipeline": pipeline_summary(module_results),
             "protocol_anomalies_by_protocol": dict(
                 sorted(
                     (
