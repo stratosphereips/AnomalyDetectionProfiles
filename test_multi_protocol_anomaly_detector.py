@@ -76,7 +76,8 @@ class MultiProtocolTests(unittest.TestCase):
                         [
                             str(zeek), "--window-seconds", "300",
                             "--training-hours", "1", "--minimum-points", "1",
-                            "--experimental-noop-mode", mode, "--quiet",
+                            "--experimental-noop-mode", "off",
+                            "--experimental-multivariate-mode", mode, "--quiet",
                             "--no-terminal-data", "-o", str(output),
                         ]
                     ),
