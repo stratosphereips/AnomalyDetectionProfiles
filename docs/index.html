@@ -208,6 +208,7 @@
       <strong>On this page</strong>
       <a href="#tour">15-minute summary</a>
       <a href="#overview">1. Complete pipeline</a>
+      <a href="#experimental">Safe experiments</a>
       <a href="#input">2. Input and correlation</a>
       <a href="#windows">3. Time windows</a>
       <a href="#features">4. Feature extraction</a>
@@ -292,6 +293,19 @@
           <div class="step"><span class="step-num">8</span><h3>Adapt</h3><p>Update the model quickly for small drift and slowly for suspicious behavior.</p></div>
         </div>
         <div class="callout good"><strong>Key idea:</strong> feature definitions are fixed and understandable, but their normal values are learned separately for each IP and protocol. A high DNS count can be normal for a resolver and anomalous for a workstation.</div>
+      </section>
+
+      <section id="experimental">
+        <h2>Safe experimental modules</h2>
+        <p>The adaptive statistical detector shown throughout this page is the <strong>locked core</strong>. Experimental detectors are placed after the core has completed its feature scoring, anomaly decisions, and adaptation. This preserves a known-good result while a new technique is evaluated.</p>
+        <div class="grid-3">
+          <div class="card"><h3>Off</h3><p>The module is not executed. Its score and contribution are zero.</p></div>
+          <div class="card"><h3>Shadow</h3><p>The module executes and reports evidence, but the pipeline forces its effective contribution to zero. Core scores and decisions remain identical.</p></div>
+          <div class="card"><h3>Active</h3><p>The module is permitted to contribute when it is eligible. Activation starts a complete dashboard recomputation; it does not mutate a saved core model. The currently installed no-op module has no contribution to apply.</p></div>
+        </div>
+        <div class="formula">module result = { status, eligible, score, candidate_contribution, contribution, reasons, top_features, responsible_uids, responsible_fuids }<br>Off or Shadow → contribution = 0<br>Active and eligible → contribution = candidate_contribution</div>
+        <p>The initial <code>noop_v1</code> module validates this control path. It deliberately returns score 0 and candidate contribution 0, including in Active mode. It is not another anomaly technique yet. If any experimental module raises an error, the pipeline reports that module as failed with contribution 0 and the core result remains available.</p>
+        <div class="callout good"><strong>How to read the dashboard:</strong> the core card is always Active and Locked. The experimental card shows the mode used for the completed run, its health, and its actual contribution. Changing the mode with Auto-run enabled starts a fresh run after 700 ms; otherwise press Run analysis.</div>
       </section>
 
       <section id="input">
