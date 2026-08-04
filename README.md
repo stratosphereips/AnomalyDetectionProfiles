@@ -79,7 +79,7 @@ python3 multi_protocol_anomaly_detector.py /path/to/zeek-logs \
   --normal-dir /path/to/known-normal-zeek-logs \
   --window-seconds 300 \
   --sensitivity 1.0 \
-  --training-hours 3
+  --training-windows 6
 ```
 
 The input must be a directory containing at least one supported Zeek protocol
@@ -94,24 +94,27 @@ weird, and the other IP-attributable logs documented below.
 
 ## Training and zero-training mode
 
-`training_hours = N` defines one capture-wide assume-benign interval:
+`training_windows = N` defines one capture-wide assume-benign interval. Its
+duration follows the configured aggregation-window size:
 
 ```text
 capture_start = timestamp of the first analyzed record
-training_end = capture_start + N * 3600
+training_end = capture_start + N * window_seconds
 training traffic: capture_start <= timestamp < training_end
 ```
 
 All and only records in that elapsed-time interval may produce trusted Welford
 training values. The interval is shared by every source-IP/protocol model and
 every destination-IP model. It is not restarted when a protocol first appears.
-If the capture starts at 09:00, `training_hours = 1` trains from 09:00 up to but
-not including 10:00. SSH first seen at 11:00 starts directly in detection mode
-with an empty model. When an aggregation window crosses the cutoff, the
-detector splits it at the cutoff so post-training traffic cannot enter a
+For example, `training_windows = 6` and `window_seconds = 600` select exactly
+the first 60 minutes. If the capture starts at 09:00, records from 09:00 up to
+but not including 10:00 may train. Selected-capture windows are anchored at
+the first record, so this produces exactly six consecutive training windows.
+SSH first seen at 11:00 starts directly in detection mode with an empty model.
+Window seven begins at the cutoff, so post-training traffic cannot enter a
 training value.
 
-Setting `training_hours = 0` skips the explicit assume-benign phase; it does
+Setting `training_windows = 0` skips the explicit assume-benign phase; it does
 not provide immediate statistical detection from an empty model. The first
 `minimum_points` observed windows for a new model have z-score zero and seed
 the baseline through normal EWMA adaptation. The next observed window is the
@@ -122,7 +125,7 @@ configured fallback thresholds are used. If SSL exists, zero training can
 still produce immediate `new_server` or `new_ja3s` flow alerts; these alerts
 do not enter the global ensemble.
 
-For example, `training_hours = 0` and `minimum_points = 8` makes the ninth
+For example, `training_windows = 0` and `minimum_points = 8` makes the ninth
 observed window for an IP/protocol pair the first statistically eligible one.
 Use zero only when no trusted benign prefix exists; early traffic necessarily
 influences the adaptive baseline.
@@ -197,7 +200,7 @@ for global anomalies, and yellow for reasons. Use `--no-terminal-data`,
 
 All model and output settings are in
 [`anomaly_detector.conf`](anomaly_detector.conf). Command-line
-`--sensitivity` and `--training-hours` override their `[common]` values.
+`--sensitivity` and `--training-windows` override their `[common]` values.
 
 See:
 
