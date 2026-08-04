@@ -209,6 +209,7 @@
       <a href="#tour">15-minute summary</a>
       <a href="#overview">1. Complete pipeline</a>
       <a href="#experimental">Safe experiments</a>
+      <a href="#multivariate">Multivariate detector</a>
       <a href="#input">2. Input and correlation</a>
       <a href="#windows">3. Time windows</a>
       <a href="#features">4. Feature extraction</a>
@@ -310,6 +311,34 @@
         <div class="formula">overlap = core IDs ∩ module IDs<br>core only = core IDs − module IDs<br>module only = module IDs − core IDs<br>decision agreement = |overlap| / |core IDs ∪ module IDs|<br>score difference = mean(|core score − module score|) over overlapping IDs</div>
         <p>The core is a stable reference, not ground truth. A module-only result is a disagreement to investigate, not automatically a false positive; a core-only result is not automatically a module failure. The initial <code>core_mirror_v1</code> module copies the core output and should therefore produce 100% agreement and zero score difference. This known answer validates the comparison path before a different model is introduced.</p>
         <div class="callout good"><strong>How to read the dashboard:</strong> the core card is always Active and Locked. The experimental card shows the mode used for the completed run, its health, and its actual contribution. Changing the mode with Auto-run enabled starts a fresh run after 700 ms; otherwise press Run analysis.</div>
+      </section>
+
+      <section id="multivariate">
+        <h2>Robust multivariate feature-relationship detector</h2>
+        <p>This is the first experimental detector that makes independent candidate decisions. The core asks whether each feature is unusual separately. The multivariate model asks whether the <strong>combination</strong> and relationship among all features is unusual. Version 1 models source-IP/protocol windows; target-IP windows and individual TLS flow alerts remain outside this experimental model.</p>
+        <div class="callout good"><strong>Example:</strong> a DNS window's query count and response count can each fall inside their ordinary ranges. If those two values normally rise and fall together, an ordinary query count combined with an ordinary but mismatched response count can still be a new joint pattern. Covariance represents that learned relationship.</div>
+
+        <h3>Exact calculation</h3>
+        <p>One model is maintained for each <code>(source IP, protocol)</code>. Suppose its current window contains <code>p</code> numeric features.</p>
+        <div class="formula">1. Transform each feature j:<br>yⱼ = ln(1 + max(0, xⱼ))<br><br>2. Robustly standardize it from historical windows:<br>mⱼ = median(yⱼ history)<br>sⱼ = max(0.05, 1.4826 × median(|yⱼ − mⱼ|))<br>uⱼ = (yⱼ − mⱼ) / sⱼ<br><br>3. Learn covariance C from the historical standardized vectors.<br><br>4. Regularize unstable correlations with shrinkage λ:<br>C*ⱼₖ = (1 − λ) × Cⱼₖ, when j ≠ k<br>C*ⱼⱼ = max(Cⱼⱼ, 0.05) + 0.05<br><br>5. Measure joint distance from the historical standardized mean ū:<br>δ = u_current − ū<br>D² = δᵀ (C*)⁻¹ δ<br>multivariate_score = √(D² / p)<br><br>6. Candidate decision:<br>multivariate_score ≥ multivariate_threshold</div>
+        <p>Dividing by the number of features before taking the square root makes scores more comparable across protocols with different vector sizes. Covariance shrinkage reduces unreliable off-diagonal relationships when only a small baseline is available. A shrinkage of 1 removes all correlations and leaves a variance-only model; lower values retain more learned relationships.</p>
+
+        <h3>Baseline, adaptation, and short captures</h3>
+        <div class="table-wrap"><table>
+          <thead><tr><th>Condition</th><th>Behavior</th></tr></thead>
+          <tbody>
+            <tr><td>External known-normal window</td><td>Always enters the multivariate history and cannot emit a candidate.</td></tr>
+            <tr><td>Core training-phase window</td><td>Enters history and cannot emit a multivariate candidate.</td></tr>
+            <tr><td>Fewer than <code>multivariate_minimum_points</code></td><td>The window seeds the covariance baseline. No joint distance is trusted yet.</td></tr>
+            <tr><td>Enough history</td><td>The current vector is scored against history <em>before</em> it is learned.</td></tr>
+            <tr><td>After scoring</td><td>The vector enters the rolling history. Only the most recent <code>multivariate_history_limit</code> windows are retained, so persistent behavior eventually replaces old behavior.</td></tr>
+          </tbody>
+        </table></div>
+        <p>With the defaults, the ninth observed window is the earliest possible multivariate comparison when there is no explicit training or external baseline. A one-hour capture therefore needs windows shorter than about seven minutes to provide nine continuously active windows for the same IP/protocol stream; five-minute windows provide at most twelve.</p>
+
+        <h3>Explanation and safety</h3>
+        <p>For a candidate, the module reports the protocols involved, responsible UIDs/FUIDs, and the five largest feature-distance contributions. A feature contribution is ranked by <code>|δⱼ × ((C*)⁻¹δ)ⱼ|</code>. This is an explanation of which dimensions drove joint distance; it is not a separate univariate threshold test.</p>
+        <div class="callout warn"><strong>Shadow-only evaluation:</strong> the dashboard intentionally offers only Off and Shadow for this model. Its candidate contribution is zero, it cannot create or modify a global anomaly, and every run rebuilds it from the selected capture and optional normal folders. Pipeline comparison shows where it agrees and disagrees with the locked core.</div>
       </section>
 
       <section id="input">
