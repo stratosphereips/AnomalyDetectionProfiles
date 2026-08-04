@@ -94,45 +94,53 @@ weird, and the other IP-attributable logs documented below.
 
 ## Training and zero-training mode
 
-Training is independent for each source-IP/protocol model and counts observed
-windows, not elapsed wall-clock intervals. `window_seconds` controls their
-size and defaults to `3600`; for example, `300` selects five-minute windows.
-With `training_hours = N`
-where `N > 0`, the first `N` observed buckets are assumed benign and fitted
-with Welford moments. Statistical alerts additionally require
-`minimum_points` prior observations, so the earliest eligible bucket is
-`max(training_hours, minimum_points) + 1` for that model.
+`training_hours = N` defines one capture-wide assume-benign interval:
+
+```text
+capture_start = timestamp of the first analyzed record
+training_end = capture_start + N * 3600
+training traffic: capture_start <= timestamp < training_end
+```
+
+All and only records in that elapsed-time interval may produce trusted Welford
+training values. The interval is shared by every source-IP/protocol model and
+every destination-IP model. It is not restarted when a protocol first appears.
+If the capture starts at 09:00, `training_hours = 1` trains from 09:00 up to but
+not including 10:00. SSH first seen at 11:00 starts directly in detection mode
+with an empty model. When an aggregation window crosses the cutoff, the
+detector splits it at the cutoff so post-training traffic cannot enter a
+training value.
 
 Setting `training_hours = 0` skips the explicit assume-benign phase; it does
 not provide immediate statistical detection from an empty model. The first
-`minimum_points` buckets have z-score zero and seed the baseline through
-normal EWMA adaptation. The next bucket is the first that can produce a
-statistical protocol-window or target-window anomaly. Because there are no benign
+`minimum_points` observed windows for a new model have z-score zero and seed
+the baseline through normal EWMA adaptation. The next observed window is the
+first that can produce a statistical source-IP/protocol/window or
+destination-IP/window anomaly. Because there are no benign
 training values, empirical threshold calibration is unavailable and the
 configured fallback thresholds are used. If SSL exists, zero training can
 still produce immediate `new_server` or `new_ja3s` flow alerts; these alerts
 do not enter the global ensemble.
 
 For example, `training_hours = 0` and `minimum_points = 8` makes the ninth
-observed bucket for an IP/protocol pair the first statistically eligible one.
+observed window for an IP/protocol pair the first statistically eligible one.
 Use zero only when no trusted benign prefix exists; early traffic necessarily
 influences the adaptive baseline.
 
-`training_hours` is retained as a configuration key for compatibility, but it
-counts observed windows when `window_seconds` differs from `3600`. For a
-one-hour capture, `window_seconds = 300`, `training_hours = 3`, and
-`minimum_points = 3` provide at most twelve windows per continuously active
-IP/protocol model, with the fourth active window first eligible for scoring.
-Sparse models may have fewer observations because empty windows are not
-invented.
+After the global training cutoff, any model with fewer than `minimum_points`
+prior values remains statistically ineligible until it accumulates enough
+detection-phase observations. These observations use EWMA adaptation; they do
+not become trusted training values and do not enter empirical threshold
+calibration.
 
 For a trusted baseline that is separate from the analyzed capture, set
 `normal_dirs` to comma-separated Zeek folders in the configuration/dashboard,
 or repeat `--normal-dir`. Their windows are fitted first, produce no alerts,
-and do not enter analyzed-run counts. External baseline traffic must use the
-same window size and should contain the same source or target IP identities as
-the traffic being compared; an unseen IP/protocol model still follows the
-ordinary training or cold-start behavior.
+and do not enter analyzed-run counts. The selected capture's global initial
+training interval is then applied as configured. External baseline traffic
+should contain the same source or destination IP identities as the traffic
+being compared; a model unseen in both trusted sources follows detection-phase
+cold start.
 
 
 
