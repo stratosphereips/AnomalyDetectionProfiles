@@ -305,6 +305,10 @@
         </div>
         <div class="formula">module result = { status, eligible, score, candidate_contribution, contribution, reasons, top_features, responsible_uids, responsible_fuids }<br>Off or Shadow → contribution = 0<br>Active and eligible → contribution = candidate_contribution</div>
         <p>The initial <code>noop_v1</code> module validates this control path. It deliberately returns score 0 and candidate contribution 0, including in Active mode. It is not another anomaly technique yet. If any experimental module raises an error, the pipeline reports that module as failed with contribution 0 and the core result remains available.</p>
+        <h3>Same-run comparison</h3>
+        <p>Final global decisions are identified as <code>source-IP@window-start</code>. The Pipeline comparison tab compares the core set with a module's candidate set:</p>
+        <div class="formula">overlap = core IDs ∩ module IDs<br>core only = core IDs − module IDs<br>module only = module IDs − core IDs<br>decision agreement = |overlap| / |core IDs ∪ module IDs|<br>score difference = mean(|core score − module score|) over overlapping IDs</div>
+        <p>The core is a stable reference, not ground truth. A module-only result is a disagreement to investigate, not automatically a false positive; a core-only result is not automatically a module failure. The initial <code>core_mirror_v1</code> module copies the core output and should therefore produce 100% agreement and zero score difference. This known answer validates the comparison path before a different model is introduced.</p>
         <div class="callout good"><strong>How to read the dashboard:</strong> the core card is always Active and Locked. The experimental card shows the mode used for the completed run, its health, and its actual contribution. Changing the mode with Auto-run enabled starts a fresh run after 700 ms; otherwise press Run analysis.</div>
       </section>
 
