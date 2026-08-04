@@ -264,7 +264,7 @@
         ["Adaptation", ["drift_alpha","suspicious_alpha","adaptation_score"]],
         ["Global ensemble", ["protocol_score_cap","global_threshold","minimum_protocols","corroboration_bonus","corroboration_bonus_cap","uid_corroboration_bonus","uid_corroboration_bonus_cap"]],
         ["Specialized SSL", ["ssl_hourly_threshold","ssl_flow_threshold","ssl_novelty_threshold","ssl_baseline_alpha","ssl_max_small_anomalies"]],
-        ["Experimental pipeline", ["experimental_noop_mode","experimental_mirror_mode"]],
+        ["Experimental pipeline", ["experimental_noop_mode","experimental_mirror_mode","experimental_multivariate_mode","multivariate_minimum_points","multivariate_threshold","multivariate_shrinkage","multivariate_history_limit"]],
         ["Attribution", ["max_responsible_flows"]]
       ];
       const all = {...state.config.common, ...state.config.multi_protocol};
@@ -277,9 +277,10 @@
           const value = all[key];
           const control = document.createElement("div"); control.className = "control";
           const reference = key === "training_hours" ? `<div id="captureReference" class="reference reference-block"></div>` : "";
-          const minimum = key === "training_hours" ? 0 : ["window_seconds","minimum_points"].includes(key) ? 1 : null;
+          const minimum = key === "training_hours" ? 0 : ["multivariate_minimum_points","multivariate_history_limit"].includes(key) ? 3 : ["window_seconds","minimum_points"].includes(key) ? 1 : null;
+          const allowedModes = key === "experimental_multivariate_mode" ? ["off","shadow"] : ["off","shadow","active"];
           const field = key.startsWith("experimental_") && key.endsWith("_mode")
-            ? `<select id="cfg-${key}" data-key="${key}">${["off","shadow","active"].map(mode => `<option value="${mode}" ${value === mode ? "selected" : ""}>${mode[0].toUpperCase()+mode.slice(1)}</option>`).join("")}</select>`
+            ? `<select id="cfg-${key}" data-key="${key}">${allowedModes.map(mode => `<option value="${mode}" ${value === mode ? "selected" : ""}>${mode[0].toUpperCase()+mode.slice(1)}</option>`).join("")}</select>`
             : typeof value === "boolean"
             ? `<select id="cfg-${key}" data-key="${key}"><option value="true" ${value ? "selected" : ""}>Ignore</option><option value="false" ${!value ? "selected" : ""}>Keep</option></select>`
             : typeof value === "string"
@@ -379,15 +380,18 @@
       const configuredMode = state.config?.multi_protocol?.experimental_noop_mode || "off";
       const core = pipeline?.core || {label:"Adaptive statistical detector",mode:"active",status:"ready",locked:true,affects_detection:true};
       const configuredMirror = state.config?.multi_protocol?.experimental_mirror_mode || "shadow";
+      const configuredMultivariate = state.config?.multi_protocol?.experimental_multivariate_mode || "shadow";
       const experiments = pipeline?.experimental || [
         {label:"No-op pipeline check",mode:configuredMode,status:configuredMode === "off" ? "disabled" : "not run",contribution:0,affects_detection:false},
-        {label:"Core mirror comparison check",mode:configuredMirror,status:configuredMirror === "off" ? "disabled" : "not run",contribution:0,affects_detection:false}
+        {label:"Core mirror comparison check",mode:configuredMirror,status:configuredMirror === "off" ? "disabled" : "not run",contribution:0,affects_detection:false},
+        {label:"Robust multivariate feature relationships",mode:configuredMultivariate,status:configuredMultivariate === "off" ? "disabled" : "not run",contribution:0,affects_detection:false}
       ];
       const cards = [core, ...experiments].map(module => {
         const failed = module.status === "error";
         const modeClass = failed ? "error" : module.mode;
         const role = module.locked ? "Locked core · always makes the current decisions" :
-          module.mode === "shadow" ? "Computed for comparison · cannot change detection" :
+          module.mode === "shadow" && module.status === "ready" && module.eligible === false ? "Ran safely · insufficient eligible history for scoring · cannot change detection" :
+          module.mode === "shadow" ? `Computed for comparison · ${module.candidate_detections?.length || 0} candidates · cannot change detection` :
           module.mode === "active" ? `Active contribution: ${fmt(module.contribution || 0)}` : "Not executed · no detection effect";
         const error = failed && module.error ? ` · ${module.error}` : "";
         return `<div class="pipeline-module"><strong>${esc(module.label || module.module)}</strong><span class="mode-pill mode-${esc(modeClass)}">${esc(failed ? "error" : module.mode)}</span>
@@ -456,9 +460,12 @@
         return `<div class="reason"><strong>${esc(module.label || module.module)} decision IDs</strong>
           <p>Core only: ${esc((c.core_only_ids || []).join(", ") || "none")}<br>Module only: ${esc((c.module_only_ids || []).join(", ") || "none")}<br>Overlap: ${esc((c.overlap_ids || []).join(", ") || "none")}</p></div>`;
       }).join("");
+      const candidates = modules.flatMap(module => (module.candidate_detections || []).map(candidate => ({module:module.label || module.module,...candidate})));
+      const candidateRows = candidates.map(candidate => `<tr><td>${esc(candidate.module)}</td><td><code>${esc(candidate.detection_id)}</code></td><td>${fmt(candidate.score)}</td><td>${esc((candidate.protocols || []).join(", ") || "multiple")}</td><td>${esc((candidate.reasons || []).map(reason => `${reason.protocol || "all"}: ${reason.feature} score ${fmt(reason.score)} · top ${(reason.top_features || []).map(feature => feature.feature).join(", ")}`).join(" · "))}</td></tr>`).join("");
+      const candidateTable = candidateRows ? `<h3>Module candidate decisions</h3><table class="flow-table"><thead><tr><th>Module</th><th>Decision ID</th><th>Score</th><th>Protocols</th><th>Reasons</th></tr></thead><tbody>${candidateRows}</tbody></table>` : `<div class="help" style="margin-top:12px">No module produced a candidate decision in this run.</div>`;
       $("results").innerHTML = `<section class="chart-panel"><div class="chart-head"><h2>Same-run decision comparison</h2><span>Core is a reference, not ground truth</span></div>
         <div class="help">Each decision ID is source IP + window start. Agreement is intersection divided by union. Score difference is calculated only for overlapping decisions.</div>
-        <table class="flow-table"><thead><tr><th>Module</th><th>Mode</th><th>Core</th><th>Module</th><th>Overlap</th><th>Core only</th><th>Module only</th><th>Agreement</th><th>Mean |score difference|</th></tr></thead><tbody>${rows}</tbody></table>${details}</section>`;
+        <table class="flow-table"><thead><tr><th>Module</th><th>Mode</th><th>Core</th><th>Module</th><th>Overlap</th><th>Core only</th><th>Module only</th><th>Agreement</th><th>Mean |score difference|</th></tr></thead><tbody>${rows}</tbody></table>${details}${candidateTable}</section>`;
     }
 
     function renderCard(row) {
