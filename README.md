@@ -22,6 +22,14 @@ evidence, not anomalies. Change **Window size (seconds)** and press **Run
 analysis** to recompute everything. When **Auto-run** is enabled, changing the
 window or any other model parameter starts a new run after 700 ms.
 
+The **Experimental pipeline** control has three modes. **Off** does not run the
+module. **Shadow** runs it and records its result but guarantees a zero
+contribution to detection. **Active** permits a module contribution. The first
+module is intentionally a no-op pipeline check, so it contributes zero even in
+Active mode. The adaptive statistical detector remains the locked core in all
+three modes. The pipeline status cards on the main page show the mode, module
+health, and whether it affected detection for the completed run.
+
 The left-side importance controls filter low/medium/high/critical anomalies
 and change ranking between composite importance, total anomaly score,
 threshold excess, protocol breadth, and reason count. Flow and protocol-window
@@ -141,6 +149,13 @@ Anomaly objects also expose `responsible_uids` and `responsible_fuids`. When
 the same responsible UID occurs in multiple anomalous components in one
 window, the global event records `shared_uids` and applies the configurable,
 capped exact-UID corroboration bonus.
+
+Every experimental module returns the same structured fields: module ID,
+label, mode, health status, eligibility, score, candidate contribution,
+effective contribution, detection-effect flag, reasons, top features, and
+responsible UID/FUID lists. One module failure is converted into an error
+result and does not stop the locked statistical detector. Module results are
+written as `experimental_module_result` entries in the operational JSONL.
 
 Terminal output uses blue for data, red for flow/protocol anomalies, magenta
 for global anomalies, and yellow for reasons. Use `--no-terminal-data`,
