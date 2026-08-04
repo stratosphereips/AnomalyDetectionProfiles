@@ -25,6 +25,7 @@ class PipelineContext:
     target_anomalies: int
     ssl_flow_alerts: int
     global_anomalies: int
+    core_detections: tuple[Mapping[str, Any], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -38,6 +39,7 @@ class ModuleEvidence:
     responsible_uids: tuple[str, ...] = ()
     responsible_fuids: tuple[str, ...] = ()
     top_features: tuple[Mapping[str, Any], ...] = ()
+    candidate_detections: tuple[Mapping[str, Any], ...] = ()
 
 
 @dataclass
@@ -57,6 +59,8 @@ class ModuleResult:
     responsible_uids: list[str] = field(default_factory=list)
     responsible_fuids: list[str] = field(default_factory=list)
     top_features: list[Mapping[str, Any]] = field(default_factory=list)
+    candidate_detections: list[Mapping[str, Any]] = field(default_factory=list)
+    comparison: dict[str, Any] = field(default_factory=dict)
     error: str = ""
 
     def to_dict(self) -> dict[str, Any]:
@@ -82,6 +86,16 @@ class NoOpModule(ExperimentalModule):
     def evaluate(self, context: PipelineContext) -> ModuleEvidence:
         del context
         return ModuleEvidence()
+
+
+class CoreMirrorModule(ExperimentalModule):
+    """Copies core decisions to validate comparison and display plumbing."""
+
+    module_id = "core_mirror_v1"
+    label = "Core mirror comparison check"
+
+    def evaluate(self, context: PipelineContext) -> ModuleEvidence:
+        return ModuleEvidence(candidate_detections=context.core_detections)
 
 
 class ExperimentalPipeline:
@@ -111,6 +125,7 @@ class ExperimentalPipeline:
                 label=module.label,
                 mode=mode,
                 status="disabled",
+                comparison=ExperimentalPipeline._compare((), context),
             )
         try:
             evidence = module.evaluate(context)
@@ -130,6 +145,10 @@ class ExperimentalPipeline:
                 responsible_uids=list(evidence.responsible_uids),
                 responsible_fuids=list(evidence.responsible_fuids),
                 top_features=list(evidence.top_features),
+                candidate_detections=list(evidence.candidate_detections),
+                comparison=ExperimentalPipeline._compare(
+                    evidence.candidate_detections, context
+                ),
             )
         except Exception as error:  # modules must never stop the locked core
             return ModuleResult(
@@ -137,8 +156,55 @@ class ExperimentalPipeline:
                 label=module.label,
                 mode=mode,
                 status="error",
+                comparison=ExperimentalPipeline._compare((), context),
                 error=f"{type(error).__name__}: {error}",
             )
+
+    @staticmethod
+    def _compare(
+        candidates: Iterable[Mapping[str, Any]],
+        context: PipelineContext,
+    ) -> dict[str, Any]:
+        core = {
+            str(item["detection_id"]): item
+            for item in context.core_detections
+            if item.get("detection_id")
+        }
+        module = {
+            str(item["detection_id"]): item
+            for item in candidates
+            if item.get("detection_id")
+        }
+        core_ids = set(core)
+        module_ids = set(module)
+        overlap = sorted(core_ids & module_ids)
+        union = core_ids | module_ids
+        score_differences = [
+            abs(
+                float(core[detection_id].get("score", 0.0))
+                - float(module[detection_id].get("score", 0.0))
+            )
+            for detection_id in overlap
+        ]
+        return {
+            "core_count": len(core_ids),
+            "module_count": len(module_ids),
+            "overlap_count": len(overlap),
+            "core_only_count": len(core_ids - module_ids),
+            "module_only_count": len(module_ids - core_ids),
+            "decision_agreement": round(
+                len(overlap) / len(union) if union else 1.0, 4
+            ),
+            "mean_absolute_score_difference": round(
+                sum(score_differences) / len(score_differences)
+                if score_differences
+                else 0.0,
+                4,
+            ),
+            "overlap_ids": overlap,
+            "core_only_ids": sorted(core_ids - module_ids),
+            "module_only_ids": sorted(module_ids - core_ids),
+        }
 
 
 def pipeline_summary(results: Iterable[ModuleResult]) -> dict[str, Any]:
