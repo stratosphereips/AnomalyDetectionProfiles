@@ -455,9 +455,12 @@
 
     function populateFilters() {
       const all = [...state.result.global_anomalies,...state.result.protocol_anomalies,...state.result.target_anomalies,...state.result.flow_anomalies,...state.result.hourly_data,...state.result.target_hourly_data];
-      const hosts = [...new Set([...state.result.global_anomalies,...state.result.protocol_anomalies,...state.result.flow_anomalies,...state.result.hourly_data].map(x=>x.host).filter(Boolean))].sort();
-      const targets = [...new Set([...state.result.target_anomalies,...state.result.target_hourly_data].map(x=>x.target || x.host).filter(Boolean))].sort();
-      const protocols = [...new Set(all.flatMap(x=>x.protocols || [x.protocol]).filter(Boolean))].sort();
+      const findings = detectorFindingEntries();
+      const sourceFindings = findings.filter(({module,candidate}) => module.module === "graph_behavior_v1" || !(candidate.protocols || []).includes("destination"));
+      const destinationFindings = findings.filter(({candidate}) => (candidate.protocols || []).includes("destination"));
+      const hosts = [...new Set([...state.result.global_anomalies,...state.result.protocol_anomalies,...state.result.flow_anomalies,...state.result.hourly_data].map(x=>x.host).filter(Boolean).concat(sourceFindings.map(({candidate}) => candidate.host).filter(Boolean)))].sort();
+      const targets = [...new Set([...state.result.target_anomalies,...state.result.target_hourly_data].map(x=>x.target || x.host).filter(Boolean).concat(destinationFindings.map(({candidate}) => candidate.host).filter(Boolean)))].sort();
+      const protocols = [...new Set(all.flatMap(x=>x.protocols || [x.protocol]).filter(Boolean).concat(findings.flatMap(({candidate}) => candidate.protocols || []).filter(Boolean)))].sort();
       $("hostFilter").innerHTML = `<option value="">All source IPs</option>` + hosts.map(x=>`<option>${esc(x)}</option>`).join("");
       $("targetFilter").innerHTML = `<option value="">All target IPs</option>` + targets.map(x=>`<option>${esc(x)}</option>`).join("");
       $("protocolFilter").innerHTML = `<option value="">All protocols</option>` + protocols.map(x=>`<option>${esc(x)}</option>`).join("");
@@ -483,7 +486,7 @@
     function renderResults() {
       if (state.tab === "docs") { $("toolbar").style.display = "none"; renderDocs(); return; }
       if (!state.result) return renderEmpty();
-      $("toolbar").style.display = ["log","comparison","methods"].includes(state.tab) ? "none" : "grid";
+      $("toolbar").style.display = ["log","comparison"].includes(state.tab) ? "none" : "grid";
       if (state.tab === "log") { $("results").innerHTML = `<pre>${esc(state.result.human_log)}</pre>`; return; }
       if (state.tab === "comparison") { renderPipelineComparison(); return; }
       if (state.tab === "methods") { renderDetectorFindings(); return; }
@@ -510,6 +513,23 @@
         .flatMap(module => (module.candidate_detections || []).map(candidate => ({module,candidate})));
     }
 
+    function filteredDetectorFindingEntries() {
+      const q = $("search").value.toLowerCase();
+      const host = $("hostFilter").value;
+      const target = $("targetFilter").value;
+      const protocol = $("protocolFilter").value;
+      return detectorFindingEntries().filter(({module,candidate}) => {
+        const protocols = candidate.protocols || [];
+        const destination = protocols.includes("destination");
+        const graph = module.module === "graph_behavior_v1";
+        const sourceScoped = graph || !destination;
+        return (!host || (sourceScoped && candidate.host === host)) &&
+          (!target || (destination && candidate.host === target)) &&
+          (!protocol || protocols.includes(protocol)) &&
+          (!q || JSON.stringify({module:module.label || module.module,candidate}).toLowerCase().includes(q));
+      }).sort((left,right) => Number(right.candidate.score || 0) - Number(left.candidate.score || 0));
+    }
+
     function renderTopFeatures(reason) {
       const features = reason.top_features || [];
       if (!features.length) return `<div class="help">No per-feature breakdown was reported.</div>`;
@@ -520,7 +540,7 @@
     }
 
     function renderDetectorFindings() {
-      const entries = detectorFindingEntries();
+      const entries = filteredDetectorFindingEntries();
       const modules = (state.result?.module_results || []).filter(module => detectorNames[module.module]);
       const filters = [{id:"all",label:"All"}, ...modules.map(module => ({id:module.module,label:detectorNames[module.module]}))];
       const countFor = id => id === "all" ? entries.length : entries.filter(entry => entry.module.module === id).length;
