@@ -62,6 +62,16 @@
       border-radius: 11px; padding: 14px 15px; box-shadow: var(--shadow); }
     .metric .value { font-size: 25px; font-weight: 820; letter-spacing: -.5px; }
     .metric .label { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .8px; }
+    .pipeline-status { display: grid; grid-template-columns: repeat(2, minmax(240px,1fr)); gap: 10px; margin: -8px 0 18px; }
+    .pipeline-module { display: grid; grid-template-columns: 1fr auto; gap: 7px 14px; align-items: center;
+      background: #091727; border: 1px solid var(--line); border-radius: 10px; padding: 11px 14px; }
+    .pipeline-module strong { font-size: 12px; }
+    .pipeline-module .module-detail { grid-column: 1 / -1; color: var(--muted); font-size: 11px; }
+    .mode-pill { border-radius: 12px; padding: 3px 8px; font-size: 10px; font-weight: 800; text-transform: uppercase;
+      border: 1px solid #36506e; color: #bed5ec; background: #12263d; }
+    .mode-active { color: #8ce9be; border-color: #287b5a; background: rgba(78,212,155,.1); }
+    .mode-shadow { color: #ffd477; border-color: #8d6a22; background: rgba(245,185,66,.1); }
+    .mode-error { color: #ffacb8; border-color: #984052; background: rgba(255,101,122,.1); }
     .tabs { display: flex; gap: 5px; border-bottom: 1px solid var(--line); margin-bottom: 14px; }
     .tab { border: 0; border-radius: 7px 7px 0 0; background: transparent; color: var(--muted); padding: 10px 15px; }
     .tab.active { color: var(--text); background: var(--panel); box-shadow: inset 0 -2px var(--blue); }
@@ -190,6 +200,7 @@
       <div class="statusbar"><span id="statusDot" class="dot"></span><span id="statusText">Ready. Select a Zeek folder and run the analysis.</span></div>
       <div id="errorBox" class="errorbox"></div>
       <section id="summary" class="summary"></section>
+      <section id="pipelineStatus" class="pipeline-status"></section>
       <nav class="tabs">
         <button class="tab" data-tab="graphs">Timeline graphs</button>
         <button class="tab active" data-tab="global">Global anomalies <span id="globalCount" class="count">0</span></button>
@@ -252,6 +263,7 @@
         ["Adaptation", ["drift_alpha","suspicious_alpha","adaptation_score"]],
         ["Global ensemble", ["protocol_score_cap","global_threshold","minimum_protocols","corroboration_bonus","corroboration_bonus_cap","uid_corroboration_bonus","uid_corroboration_bonus_cap"]],
         ["Specialized SSL", ["ssl_hourly_threshold","ssl_flow_threshold","ssl_novelty_threshold","ssl_baseline_alpha","ssl_max_small_anomalies"]],
+        ["Experimental pipeline", ["experimental_noop_mode"]],
         ["Attribution", ["max_responsible_flows"]]
       ];
       const all = {...state.config.common, ...state.config.multi_protocol};
@@ -265,7 +277,9 @@
           const control = document.createElement("div"); control.className = "control";
           const reference = key === "training_hours" ? `<div id="captureReference" class="reference reference-block"></div>` : "";
           const minimum = key === "training_hours" ? 0 : ["window_seconds","minimum_points"].includes(key) ? 1 : null;
-          const field = typeof value === "boolean"
+          const field = key === "experimental_noop_mode"
+            ? `<select id="cfg-${key}" data-key="${key}">${["off","shadow","active"].map(mode => `<option value="${mode}" ${value === mode ? "selected" : ""}>${mode[0].toUpperCase()+mode.slice(1)}</option>`).join("")}</select>`
+            : typeof value === "boolean"
             ? `<select id="cfg-${key}" data-key="${key}"><option value="true" ${value ? "selected" : ""}>Ignore</option><option value="false" ${!value ? "selected" : ""}>Keep</option></select>`
             : typeof value === "string"
             ? `<input id="cfg-${key}" data-key="${key}" type="text" value="${esc(value)}" placeholder="/normal/day1, /normal/day2">`
@@ -348,6 +362,7 @@
       ];
       $("summary").innerHTML = metrics.map(([label,value,color]) =>
         `<div class="metric"><div class="value" style="color:var(--${color})">${fmt(value)}</div><div class="label">${esc(label)}</div></div>`).join("");
+      renderPipelineStatus(s.pipeline);
       $("globalCount").textContent = r.global_anomalies.length;
       $("protocolCount").textContent = r.protocol_anomalies.length;
       $("targetCount").textContent = r.target_anomalies.length;
@@ -357,6 +372,23 @@
       populateFilters();
       updateCaptureReference();
       renderResults();
+    }
+
+    function renderPipelineStatus(pipeline) {
+      const configuredMode = state.config?.multi_protocol?.experimental_noop_mode || "off";
+      const core = pipeline?.core || {label:"Adaptive statistical detector",mode:"active",status:"ready",locked:true,affects_detection:true};
+      const experiments = pipeline?.experimental || [{label:"No-op pipeline check",mode:configuredMode,status:configuredMode === "off" ? "disabled" : "not run",contribution:0,affects_detection:false}];
+      const cards = [core, ...experiments].map(module => {
+        const failed = module.status === "error";
+        const modeClass = failed ? "error" : module.mode;
+        const role = module.locked ? "Locked core · always makes the current decisions" :
+          module.mode === "shadow" ? "Computed for comparison · cannot change detection" :
+          module.mode === "active" ? `Active contribution: ${fmt(module.contribution || 0)}` : "Not executed · no detection effect";
+        const error = failed && module.error ? ` · ${module.error}` : "";
+        return `<div class="pipeline-module"><strong>${esc(module.label || module.module)}</strong><span class="mode-pill mode-${esc(modeClass)}">${esc(failed ? "error" : module.mode)}</span>
+          <div class="module-detail">${esc(role + error)}</div></div>`;
+      });
+      $("pipelineStatus").innerHTML = cards.join("");
     }
 
     function populateFilters() {
@@ -626,6 +658,7 @@
 
     function renderEmpty() {
       $("summary").innerHTML = "";
+      renderPipelineStatus(null);
       $("results").innerHTML = `<div class="empty"><strong>No analysis loaded</strong><br>Choose a Zeek folder, adjust the model, and run the detector.</div>`;
     }
 
