@@ -38,6 +38,15 @@ difference of zero. A future detector can use the same table to show overlap,
 core-only decisions, module-only decisions, and score differences. The core is
 a reference in this display, not assumed ground truth.
 
+The first independent experimental detector is **Robust multivariate feature
+relationships**. For each source-IP/protocol stream it learns a regularized
+covariance matrix over the complete transformed feature vector and scores new
+windows with dimension-normalized robust Mahalanobis distance. This can detect
+an unusual combination of individually ordinary values. It runs in Shadow by
+default and is deliberately restricted to **Off** or **Shadow**: its candidates
+are visible in Pipeline comparison but cannot alter core anomalies. It requires
+no NumPy, scikit-learn, model download, or external API.
+
 The left-side importance controls filter low/medium/high/critical anomalies
 and change ranking between composite importance, total anomaly score,
 threshold excess, protocol breadth, and reason count. Flow and protocol-window
