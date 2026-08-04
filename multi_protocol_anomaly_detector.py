@@ -16,6 +16,7 @@ from typing import Any, Callable, Optional
 from configuration import load_settings
 from detection_core import AdaptiveStats, ZeekReader, clean, number
 from experimental_pipeline import (
+    CoreMirrorModule,
     ExperimentalPipeline,
     NoOpModule,
     PipelineContext,
@@ -63,6 +64,7 @@ MULTI_DEFAULTS = {
     "ssl_baseline_alpha": 0.10,
     "ssl_max_small_anomalies": 2,
     "experimental_noop_mode": "off",
+    "experimental_mirror_mode": "shadow",
 }
 
 # Protocol-specific categorical novelty, numeric volume, and failure signals.
@@ -2331,6 +2333,15 @@ def parser(
         ),
     )
     result.add_argument(
+        "--experimental-mirror-mode",
+        choices=("off", "shadow", "active"),
+        default=settings["experimental_mirror_mode"],
+        help=(
+            "core-mirror validation module: compares identical host/window "
+            "decisions without adding a second detection contribution"
+        ),
+    )
+    result.add_argument(
         "-q", "--quiet", action="store_true", default=settings["quiet"]
     )
     result.add_argument(
@@ -2422,6 +2433,7 @@ def main(argv: Optional[list[str]] = None) -> int:
             "normal_dirs": [str(path) for path in args.normal_dirs],
             "sensitivity": args.sensitivity,
             "experimental_noop_mode": args.experimental_noop_mode,
+            "experimental_mirror_mode": args.experimental_mirror_mode,
         },
     )
     try:
@@ -2457,19 +2469,30 @@ def main(argv: Optional[list[str]] = None) -> int:
         )
         process_observations(detector, observations)
         global_events = detector.ensemble()
-        module_results = ExperimentalPipeline(
-            [(NoOpModule(), args.experimental_noop_mode)]
-        ).run(
-            PipelineContext(
-                records_processed=sum(detector.records_by_protocol.values()),
-                window_seconds=args.window_seconds,
-                protocols=tuple(protocol for protocol, _ in logs),
-                protocol_anomalies=len(detector.protocol_anomalies),
-                target_anomalies=len(detector.target_anomalies),
-                ssl_flow_alerts=len(detector.flow_anomalies),
-                global_anomalies=len(global_events),
-            )
+        pipeline_context = PipelineContext(
+            records_processed=sum(detector.records_by_protocol.values()),
+            window_seconds=args.window_seconds,
+            protocols=tuple(protocol for protocol, _ in logs),
+            protocol_anomalies=len(detector.protocol_anomalies),
+            target_anomalies=len(detector.target_anomalies),
+            ssl_flow_alerts=len(detector.flow_anomalies),
+            global_anomalies=len(global_events),
+            core_detections=tuple(
+                {
+                    "detection_id": f'{event["host"]}@{event["hour_start"]}',
+                    "host": event["host"],
+                    "window_start": event["hour_start"],
+                    "score": event["global_score"],
+                }
+                for event in global_events
+            ),
         )
+        module_results = ExperimentalPipeline(
+            [
+                (NoOpModule(), args.experimental_noop_mode),
+                (CoreMirrorModule(), args.experimental_mirror_mode),
+            ]
+        ).run(pipeline_context)
         for module_result in module_results:
             output.write(
                 "events",
