@@ -220,7 +220,7 @@
       <a href="#special">7. Specialized techniques</a>
       <a href="#adaptation">8. Model and adaptation</a>
       <a href="#ensemble">9. Global ensemble</a>
-      <a href="#attribution">10. Explaining alerts</a>
+      <a href="#attribution">10. Core anomaly evidence</a>
       <a href="#settings">11. Important settings</a>
       <a href="#experimental">Optional detector modes</a>
       <a href="#multivariate">Additional detection methods</a>
@@ -678,8 +678,9 @@
       </section>
 
       <section id="attribution">
-        <h2>10. Why did the detector alert?</h2>
-        <p>The detector stores reasons and responsible records rather than returning only a score. Attribution is feature-aware:</p>
+        <h2>10. Evidence behind core statistical anomalies</h2>
+        <p>This section is still part of the core statistical detector explained in sections 1–9. It shows how a core source-IP/protocol or destination-IP anomaly is linked back to the Zeek records that produced its anomalous feature values. Optional detector methods and their evidence are explained later.</p>
+        <p>The core stores feature reasons and responsible records rather than returning only a score. Flow selection depends on the type of anomalous feature:</p>
         <div class="table-wrap"><table>
           <thead><tr><th>Reason type</th><th>How responsible flows are selected</th></tr></thead>
           <tbody>
