@@ -62,6 +62,14 @@ def numeric_context(include_target: bool = False) -> PipelineContext:
                 "failures": 1 if not unusual else 30,
             },
             "uids": [f"C{index}"], "fuids": [],
+            "responsible_flow_count": 1,
+            "responsible_flows": [{
+                "log": "conn", "ts": index * 300 + 1,
+                "uid": f"C{index}", "fuid": "",
+                "src": "10.0.0.8", "src_port": "12345",
+                "dst": "192.0.2.20", "dst_port": "443",
+                "details": {"service": "ssl"},
+            }],
         })
     targets = tuple({
         "target": "192.0.2.20", "window_start": row["window_start"],
@@ -221,6 +229,11 @@ class ExperimentalPipelineTests(unittest.TestCase):
         self.assertFalse(shadow.affects_detection)
         self.assertGreater(active.contribution, 0)
         self.assertTrue(active.affects_detection)
+        self.assertTrue(active.candidate_detections[0]["responsible_flows"])
+        self.assertIn(
+            "empirical_feature_rarity",
+            active.candidate_detections[0]["responsible_flows"][0]["matched_features"],
+        )
 
 
 if __name__ == "__main__":
