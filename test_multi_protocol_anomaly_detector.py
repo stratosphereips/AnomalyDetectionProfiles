@@ -133,6 +133,116 @@ class MultiProtocolTests(unittest.TestCase):
                 all(row["window_seconds"] == 300 for row in rows)
             )
 
+    def test_training_is_one_capture_wide_time_interval(self):
+        with tempfile.TemporaryDirectory() as temp:
+            args = arguments()
+            args.training_hours = 1
+            args.window_seconds = 3600
+            output = Outputs(Path(temp), quiet=True)
+            detector = MultiProtocolDetector(args, output)
+            capture_start = 9 * 3600.0
+            detector.observe(
+                "dns",
+                {
+                    "ts": str(capture_start),
+                    "uid": "D-training",
+                    "id.orig_h": "10.0.0.1",
+                    "id.resp_h": "1.1.1.1",
+                    "query": "example.test",
+                    "qtype_name": "A",
+                    "rcode_name": "NOERROR",
+                },
+                "10.0.0.1",
+                capture_start,
+            )
+            late_timestamp = capture_start + 2 * 3600
+            late_record = {
+                "ts": str(late_timestamp),
+                "uid": "S-detection",
+                "id.orig_h": "10.0.0.1",
+                "id.resp_h": "192.0.2.20",
+                "auth_success": "F",
+                "auth_attempts": "5",
+            }
+            detector.observe(
+                "ssh", late_record, "10.0.0.1", late_timestamp
+            )
+            detector.observe_target(
+                "ssh",
+                late_record,
+                "10.0.0.1",
+                "192.0.2.20",
+                late_timestamp,
+            )
+            detector.finalize_all()
+            detector.finalize_targets()
+            output.close()
+
+            rows = [
+                json.loads(line)
+                for line in (Path(temp) / "protocol_hourly_data.jsonl")
+                .read_text()
+                .splitlines()
+            ]
+            phases = {row["protocol"]: row["phase"] for row in rows}
+            self.assertEqual(phases["dns"], "training")
+            self.assertEqual(phases["ssh"], "detection")
+            self.assertEqual(detector.capture_start, capture_start)
+            self.assertEqual(
+                detector.training_cutoff, capture_start + 3600
+            )
+            self.assertEqual(
+                detector.states[("10.0.0.1", "dns")].trained_windows, 1
+            )
+            ssh_state = detector.states[("10.0.0.1", "ssh")]
+            self.assertEqual(ssh_state.trained_windows, 0)
+            self.assertTrue(
+                all(not model.training_values for model in ssh_state.models.values())
+            )
+            self.assertEqual(
+                detector.target_states["192.0.2.20"].trained_windows, 0
+            )
+
+    def test_training_cutoff_splits_a_straddling_window(self):
+        with tempfile.TemporaryDirectory() as temp:
+            args = arguments()
+            args.training_hours = 1
+            args.window_seconds = 3600
+            output = Outputs(Path(temp), quiet=True)
+            detector = MultiProtocolDetector(args, output)
+            capture_start = 9 * 3600.0 + 15 * 60
+            for index, timestamp in enumerate(
+                (capture_start, capture_start + 3600)
+            ):
+                detector.observe(
+                    "dns",
+                    {
+                        "ts": str(timestamp),
+                        "uid": f"D{index}",
+                        "id.orig_h": "10.0.0.1",
+                        "id.resp_h": "1.1.1.1",
+                        "query": "example.test",
+                        "qtype_name": "A",
+                        "rcode_name": "NOERROR",
+                    },
+                    "10.0.0.1",
+                    timestamp,
+                )
+            detector.finalize_all()
+            output.close()
+            rows = [
+                json.loads(line)
+                for line in (Path(temp) / "protocol_hourly_data.jsonl")
+                .read_text()
+                .splitlines()
+            ]
+            self.assertEqual(
+                [row["phase"] for row in rows], ["training", "detection"]
+            )
+            self.assertEqual(
+                rows[1]["window_start"], capture_start + 3600
+            )
+
     def test_importance_rewards_breadth_and_threshold_excess(self):
         narrow = importance_metrics(
             [{"zscore": 4.0, "threshold": 3.5}], 4.0, protocol_count=1
