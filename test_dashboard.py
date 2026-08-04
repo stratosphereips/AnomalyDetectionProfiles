@@ -48,6 +48,7 @@ class DashboardTests(unittest.TestCase):
         self.assertIn("window_seconds", dashboard.SETTING_METADATA)
         self.assertIn("normal_dirs", dashboard.SETTING_METADATA)
         self.assertIn("experimental_noop_mode", dashboard.SETTING_METADATA)
+        self.assertIn("experimental_mirror_mode", dashboard.SETTING_METADATA)
         self.assertIn("uid_corroboration_bonus", dashboard.SETTING_METADATA)
         self.assertIn("ssh", dashboard.DETECTED_LOGS)
         self.assertIn("Target-IP anomalies", html)
@@ -70,6 +71,8 @@ class DashboardTests(unittest.TestCase):
         self.assertIn("setTimeout(runAnalysis, 700)", html)
         self.assertIn("Experimental pipeline", html)
         self.assertIn("renderPipelineStatus", html)
+        self.assertIn("Pipeline comparison", html)
+        self.assertIn("renderPipelineComparison", html)
         self.assertIn("ignore_multicast_broadcast", dashboard.SETTING_METADATA)
         self.assertEqual(
             dashboard.SETTING_METADATA["ignore_multicast_broadcast"][0],
@@ -101,6 +104,9 @@ class DashboardTests(unittest.TestCase):
         self.assertIn("Safe experimental modules", guide)
         self.assertIn("Off or Shadow → contribution = 0", guide)
         self.assertIn("noop_v1", guide)
+        self.assertIn("Same-run comparison", guide)
+        self.assertIn("core_mirror_v1", guide)
+        self.assertIn("decision agreement = |overlap|", guide)
         source = Path(dashboard.__file__).read_text(encoding="utf-8")
         self.assertIn('"/docs/"', source)
 
@@ -157,6 +163,13 @@ class DashboardTests(unittest.TestCase):
             self.assertTrue(result["model_updates"])
             self.assertEqual(result["module_results"][0]["module"], "noop_v1")
             self.assertEqual(result["module_results"][0]["mode"], "off")
+            self.assertEqual(
+                result["module_results"][1]["module"], "core_mirror_v1"
+            )
+            self.assertEqual(
+                result["module_results"][1]["comparison"]["decision_agreement"],
+                1.0,
+            )
             self.assertTrue(result["summary"]["pipeline"]["core"]["locked"])
             self.assertEqual(
                 result["flow_anomalies"],
@@ -260,6 +273,20 @@ class DashboardTests(unittest.TestCase):
             self.assertIn("ignore_multicast_broadcast = false", text)
             self.assertIn("ssl_flow_threshold = 4.4", text)
             self.assertIn("experimental_noop_mode = shadow", text)
+
+    def test_saved_config_is_merged_with_new_packaged_defaults(self):
+        with tempfile.TemporaryDirectory() as temp:
+            saved = Path(temp) / "saved.conf"
+            saved.write_text(
+                "[common]\ntraining_hours = 9\n", encoding="utf-8"
+            )
+            with patch.object(dashboard, "SAVED_CONFIG", saved):
+                config = dashboard.dashboard_config()
+            self.assertEqual(config["common"]["training_hours"], 9)
+            self.assertEqual(
+                config["multi_protocol"]["experimental_mirror_mode"],
+                "shadow",
+            )
 
 
 if __name__ == "__main__":
