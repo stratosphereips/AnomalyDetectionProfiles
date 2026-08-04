@@ -70,9 +70,11 @@ DETECTED_LOGS = {
 
 SETTING_METADATA = {
     "training_hours": (
-        "Benign training windows",
-        "Observed windows fitted as benign per model. Zero skips explicit "
-        "training, but statistical alerts still require Minimum baseline points.",
+        "Benign training hours",
+        "One capture-wide benign interval measured from the first analyzed "
+        "record. A protocol first seen after this interval does not receive "
+        "delayed training. Zero skips explicit training, but statistical "
+        "alerts still require Minimum baseline points.",
     ),
     "window_seconds": (
         "Window size (seconds)",
