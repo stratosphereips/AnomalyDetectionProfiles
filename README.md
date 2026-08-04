@@ -30,6 +30,14 @@ Active mode. The adaptive statistical detector remains the locked core in all
 three modes. The pipeline status cards on the main page show the mode, module
 health, and whether it affected detection for the completed run.
 
+The **Core mirror comparison check** is enabled in Shadow mode by default. It
+copies the locked core's final global decision IDs and scores without adding a
+second vote. Open **Pipeline comparison** to verify the comparison machinery:
+the mirror should show 100% decision agreement and a mean absolute score
+difference of zero. A future detector can use the same table to show overlap,
+core-only decisions, module-only decisions, and score differences. The core is
+a reference in this display, not assumed ground truth.
+
 The left-side importance controls filter low/medium/high/critical anomalies
 and change ranking between composite importance, total anomaly score,
 threshold excess, protocol breadth, and reason count. Flow and protocol-window
@@ -153,7 +161,9 @@ capped exact-UID corroboration bonus.
 Every experimental module returns the same structured fields: module ID,
 label, mode, health status, eligibility, score, candidate contribution,
 effective contribution, detection-effect flag, reasons, top features, and
-responsible UID/FUID lists. One module failure is converted into an error
+responsible UID/FUID lists. Candidate decisions also include a stable
+`source-IP@window-start` identity so same-run model outputs can be compared.
+One module failure is converted into an error
 result and does not stop the locked statistical detector. Module results are
 written as `experimental_module_result` entries in the operational JSONL.
 
