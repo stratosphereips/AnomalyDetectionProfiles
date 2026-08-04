@@ -7,6 +7,7 @@ import argparse
 import configparser
 import html
 import json
+import math
 import os
 import re
 import subprocess
@@ -69,12 +70,13 @@ DETECTED_LOGS = {
 
 
 SETTING_METADATA = {
-    "training_hours": (
-        "Benign training hours",
-        "One capture-wide benign interval measured from the first analyzed "
-        "record. A protocol first seen after this interval does not receive "
-        "delayed training. Zero skips explicit training, but statistical "
-        "alerts still require Minimum baseline points.",
+    "training_windows": (
+        "Benign training windows",
+        "Number of aggregation windows in one capture-wide benign interval. "
+        "Its duration is this value multiplied by Window size. A protocol "
+        "first seen afterward does not receive delayed training. Zero skips "
+        "explicit training, but statistical alerts still require Minimum "
+        "baseline points.",
     ),
     "window_seconds": (
         "Window size (seconds)",
@@ -420,7 +422,6 @@ def inspect_zeek_folder(
     timestamps: list[float] = []
     records = 0
     active_hours: set[int] = set()
-    active_windows: set[int] = set()
     logs = 0
     for log_path in sorted(path.glob("*.log")):
         if log_path.stem not in DETECTED_LOGS:
@@ -433,7 +434,6 @@ def inspect_zeek_folder(
                 ts = number(record.get("ts"))
                 timestamps.append(ts)
                 active_hours.add(int(ts) - int(ts) % 3600)
-                active_windows.add(int(ts) - int(ts) % window_seconds)
                 records += 1
                 log_records += 1
         except (OSError, ValueError, json.JSONDecodeError):
@@ -445,8 +445,10 @@ def inspect_zeek_folder(
     minimum, maximum = min(timestamps), max(timestamps)
     first_hour = int(minimum) - int(minimum) % 3600
     last_hour = int(maximum) - int(maximum) % 3600
-    first_window = int(minimum) - int(minimum) % window_seconds
-    last_window = int(maximum) - int(maximum) % window_seconds
+    active_windows = {
+        math.floor((timestamp - minimum) / window_seconds)
+        for timestamp in timestamps
+    }
     duration_seconds = maximum - minimum
     return {
         "path": str(path),
@@ -459,8 +461,8 @@ def inspect_zeek_folder(
         "traffic_hour_span": ((last_hour - first_hour) // 3600) + 1,
         "active_traffic_hours": len(active_hours),
         "window_seconds": window_seconds,
-        "traffic_window_span": (
-            (last_window - first_window) // window_seconds
+        "traffic_window_span": math.floor(
+            (maximum - minimum) / window_seconds
         ) + 1,
         "active_traffic_windows": len(active_windows),
     }
