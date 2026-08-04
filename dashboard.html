@@ -62,7 +62,15 @@
       border-radius: 11px; padding: 14px 15px; box-shadow: var(--shadow); }
     .metric .value { font-size: 25px; font-weight: 820; letter-spacing: -.5px; }
     .metric .label { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .8px; }
-    .pipeline-status { display: grid; grid-template-columns: repeat(2, minmax(240px,1fr)); gap: 10px; margin: -8px 0 18px; }
+    .detector-details { margin: -8px 0 12px; border: 1px solid var(--line); border-radius: 9px; background: #081522; }
+    .detector-details > summary { display: flex; align-items: center; justify-content: space-between; gap: 16px;
+      padding: 9px 12px; cursor: pointer; color: var(--muted); font-size: 11px; list-style: none; }
+    .detector-details > summary::-webkit-details-marker { display: none; }
+    .detector-details > summary::after { content: "Show"; color: var(--blue); font-weight: 800; }
+    .detector-details[open] > summary::after { content: "Hide"; }
+    .detector-details > summary strong { color: var(--text); font-size: 12px; }
+    .detector-details-body { padding: 4px 10px 10px; border-top: 1px solid var(--line); }
+    .pipeline-status { display: grid; grid-template-columns: repeat(2, minmax(240px,1fr)); gap: 10px; margin: 0; }
     .pipeline-module { display: grid; grid-template-columns: 1fr auto; gap: 7px 14px; align-items: center;
       background: #091727; border: 1px solid var(--line); border-radius: 10px; padding: 11px 14px; }
     .pipeline-module strong { font-size: 12px; }
@@ -72,7 +80,7 @@
     .mode-active { color: #8ce9be; border-color: #287b5a; background: rgba(78,212,155,.1); }
     .mode-shadow { color: #ffd477; border-color: #8d6a22; background: rgba(245,185,66,.1); }
     .mode-error { color: #ffacb8; border-color: #984052; background: rgba(255,101,122,.1); }
-    .mode-guide { display: grid; grid-template-columns: repeat(3,1fr); gap: 8px; margin: -8px 0 16px; }
+    .mode-guide { display: grid; grid-template-columns: repeat(3,1fr); gap: 8px; margin: 6px 0 10px; }
     .mode-guide div { padding: 9px 12px; border: 1px solid var(--line); border-radius: 9px; background: #081522; color: var(--muted); font-size: 11px; }
     .mode-guide strong { color: var(--text); }
     .tabs { display: flex; gap: 5px; border-bottom: 1px solid var(--line); margin-bottom: 14px; }
@@ -203,12 +211,17 @@
       <div class="statusbar"><span id="statusDot" class="dot"></span><span id="statusText">Ready. Select a Zeek folder and run the analysis.</span></div>
       <div id="errorBox" class="errorbox"></div>
       <section id="summary" class="summary"></section>
-      <section class="mode-guide" aria-label="Pipeline mode definitions">
-        <div><strong>ACTIVE</strong><br>The core always detects; active optional methods may add anomalies but never remove core anomalies.</div>
-        <div><strong>SHADOW</strong><br>Runs and shows candidates, but cannot change official anomalies.</div>
-        <div><strong>OFF</strong><br>Does not run. No candidates and no effect.</div>
-      </section>
-      <section id="pipelineStatus" class="pipeline-status"></section>
+      <details class="detector-details">
+        <summary><strong>Detection methods</strong><span id="detectorStatusSummary">Core active · optional methods not run</span></summary>
+        <div class="detector-details-body">
+          <section class="mode-guide" aria-label="Pipeline mode definitions">
+            <div><strong>ACTIVE</strong><br>The core always detects; active optional methods may add anomalies but never remove core anomalies.</div>
+            <div><strong>SHADOW</strong><br>Runs and shows candidates, but cannot change official anomalies.</div>
+            <div><strong>OFF</strong><br>Does not run. No candidates and no effect.</div>
+          </section>
+          <section id="pipelineStatus" class="pipeline-status"></section>
+        </div>
+      </details>
       <nav class="tabs">
         <button class="tab" data-tab="graphs">Timeline graphs</button>
         <button class="tab active" data-tab="global">Global anomalies <span id="globalCount" class="count">0</span></button>
@@ -398,8 +411,8 @@
       const configuredMirror = state.config?.multi_protocol?.experimental_mirror_mode || "shadow";
       const configured = key => state.config?.multi_protocol?.[key] || "shadow";
       const experiments = pipeline?.experimental || [
-        {label:"No-op pipeline check",mode:configuredMode,status:configuredMode === "off" ? "disabled" : "not run",contribution:0,affects_detection:false},
-        {label:"Core mirror comparison check",mode:configuredMirror,status:configuredMirror === "off" ? "disabled" : "not run",contribution:0,affects_detection:false},
+        {module:"noop_v1",label:"No-op pipeline check",mode:configuredMode,status:configuredMode === "off" ? "disabled" : "not run",contribution:0,affects_detection:false},
+        {module:"core_mirror_v1",label:"Core mirror comparison check",mode:configuredMirror,status:configuredMirror === "off" ? "disabled" : "not run",contribution:0,affects_detection:false},
         ...[
           ["Robust multivariate feature relationships","experimental_multivariate_mode"],
           ["PCA reconstruction error","experimental_pca_mode"],
@@ -409,6 +422,12 @@
           ["Communication graph behavior","experimental_graph_mode"]
         ].map(([label,key]) => ({label,mode:configured(key),status:configured(key) === "off" ? "disabled" : "not run",contribution:0,affects_detection:false}))
       ];
+      const validationIds = new Set(["noop_v1","core_mirror_v1"]);
+      const realDetectors = experiments.filter(module => !validationIds.has(module.module));
+      const modeCount = mode => realDetectors.filter(module => module.mode === mode).length;
+      const candidates = realDetectors.reduce((total,module) => total + (module.candidate_detections?.length || 0), 0);
+      const failures = realDetectors.filter(module => module.status === "error").length;
+      $("detectorStatusSummary").textContent = `Core active · ${modeCount("active")} active · ${modeCount("shadow")} shadow · ${modeCount("off")} off · ${candidates} candidates${failures ? ` · ${failures} failed` : ""}`;
       const cards = [core, ...experiments].map(module => {
         const failed = module.status === "error";
         const modeClass = failed ? "error" : module.mode;
