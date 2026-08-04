@@ -47,6 +47,53 @@ def arguments():
 
 
 class MultiProtocolTests(unittest.TestCase):
+    def test_off_and_shadow_have_identical_core_outputs(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            zeek = root / "zeek"
+            zeek.mkdir()
+            records = [
+                {
+                    "ts": index * 300 + 1,
+                    "uid": f"D{index}",
+                    "id.orig_h": "10.0.0.1",
+                    "id.resp_h": "1.1.1.1",
+                    "query": "example.test" if index < 3 else "unusual.example",
+                    "qtype_name": "A",
+                    "rcode_name": "NOERROR",
+                }
+                for index in range(5)
+            ]
+            (zeek / "dns.log").write_text(
+                "".join(json.dumps(record) + "\n" for record in records),
+                encoding="utf-8",
+            )
+            outputs = {}
+            for mode in ("off", "shadow"):
+                output = root / mode
+                self.assertEqual(
+                    main(
+                        [
+                            str(zeek), "--window-seconds", "300",
+                            "--training-hours", "1", "--minimum-points", "1",
+                            "--experimental-noop-mode", mode, "--quiet",
+                            "--no-terminal-data", "-o", str(output),
+                        ]
+                    ),
+                    0,
+                )
+                outputs[mode] = output
+            for filename in (
+                "protocol_hourly_data.jsonl", "target_hourly_data.jsonl",
+                "flow_anomalies.jsonl", "protocol_anomalies.jsonl",
+                "target_anomalies.jsonl", "global_anomalies.jsonl",
+            ):
+                self.assertEqual(
+                    (outputs["off"] / filename).read_bytes(),
+                    (outputs["shadow"] / filename).read_bytes(),
+                    filename,
+                )
+
     def test_configurable_window_bucketing(self):
         self.assertEqual(bucket_start(599.9, 300), 300)
         self.assertEqual(bucket_start(600.0, 300), 600)
