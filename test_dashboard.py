@@ -75,6 +75,9 @@ class DashboardTests(unittest.TestCase):
         self.assertIn("renderPipelineStatus", html)
         self.assertIn("Pipeline comparison", html)
         self.assertIn("renderPipelineComparison", html)
+        self.assertIn("SHADOW · no official effect", html)
+        self.assertIn("Pipeline validation checks — not detectors", html)
+        self.assertIn("display only—not probability", html)
         self.assertIn("ignore_multicast_broadcast", dashboard.SETTING_METADATA)
         self.assertEqual(
             dashboard.SETTING_METADATA["ignore_multicast_broadcast"][0],
@@ -112,6 +115,9 @@ class DashboardTests(unittest.TestCase):
         self.assertIn("Robust multivariate feature-relationship detector", guide)
         self.assertIn("D² = δᵀ (C*)⁻¹ δ", guide)
         self.assertIn("Shadow-only evaluation", guide)
+        self.assertIn("Shadow = safe dry run", guide)
+        self.assertIn("Only the locked statistical core is Active today", guide)
+        self.assertIn("Reading one dashboard candidate", guide)
         source = Path(dashboard.__file__).read_text(encoding="utf-8")
         self.assertIn('"/docs/"', source)
 
