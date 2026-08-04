@@ -223,8 +223,8 @@
         </div>
       </details>
       <nav class="tabs">
-        <button class="tab" data-tab="graphs">Timeline graphs</button>
-        <button class="tab active" data-tab="global">Global anomalies <span id="globalCount" class="count">0</span></button>
+        <button class="tab active" data-tab="graphs">Timeline graphs</button>
+        <button class="tab" data-tab="global">Global anomalies <span id="globalCount" class="count">0</span></button>
         <button class="tab" data-tab="protocol">Protocol-window anomalies <span id="protocolCount" class="count">0</span></button>
         <button class="tab" data-tab="target">Target-IP anomalies <span id="targetCount" class="count">0</span></button>
         <button class="tab" data-tab="flow">SSL flow alerts <span id="flowCount" class="count">0</span></button>
@@ -251,7 +251,7 @@
   </dialog>
 
   <script>
-    const state = { defaults: null, config: null, result: null, docs: null, tab: "global", browsePath: "", timer: null, inspectTimer: null, running: false, pendingRun: false,
+    const state = { defaults: null, config: null, result: null, docs: null, tab: "graphs", browsePath: "", timer: null, inspectTimer: null, running: false, pendingRun: false,
       ranking: {global:"importance_score", protocol:"total_score", target:"importance_score", flow:"total_score", data:"hour_start", targetdata:"hour_start"} };
     const $ = id => document.getElementById(id);
     const esc = value => String(value ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
