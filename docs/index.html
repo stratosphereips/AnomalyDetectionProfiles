@@ -171,9 +171,6 @@
     .z-result div { padding: 0.7rem; border: 1px solid #d8e1ee; border-radius: 8px; background: #f8fbff; }
     .z-result strong { display: block; color: #173c70; font-size: 1.15rem; }
 
-    .example-flow { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; }
-    .phase { padding: 1rem; border-top: 4px solid var(--blue); border-radius: 8px; background: white; box-shadow: var(--shadow); }
-    .phase.alert { border-color: var(--red); }
     .footer { padding: 2rem 1.25rem; color: #c6d5ec; text-align: center; background: #0c1c3c; }
 
     @media (max-width: 980px) {
@@ -188,7 +185,7 @@
     @media (max-width: 640px) {
       .hero { padding-top: 3rem; }
       nav { columns: 1; }
-      .pipeline, .grid-2, .grid-3, .example-flow, .decision { grid-template-columns: 1fr; }
+      .pipeline, .grid-2, .grid-3, .decision { grid-template-columns: 1fr; }
       .step::after, .decision .arrow { display: none; }
       .calc-grid { grid-template-columns: 1fr; }
       .tour-grid, .output-grid { grid-template-columns: 1fr; }
@@ -207,7 +204,6 @@
       <a href="#overview">Start with the pipeline</a>
       <a href="#features">See feature examples</a>
       <a href="#scoring">Score calculator</a>
-      <a href="#walkthrough">Read a full example</a>
     </div>
   </header>
 
@@ -225,8 +221,7 @@
       <a href="#adaptation">8. Model and adaptation</a>
       <a href="#ensemble">9. Global ensemble</a>
       <a href="#attribution">10. Explaining alerts</a>
-      <a href="#walkthrough">11. Full example</a>
-      <a href="#settings">12. Important settings</a>
+      <a href="#settings">11. Important settings</a>
       <a href="#experimental">Optional detector modes</a>
       <a href="#multivariate">Additional detection methods</a>
     </nav>
@@ -699,27 +694,8 @@
         <p>Each anomaly reports the feature value, learned mean, z-score, effective threshold, direction, explanation, responsible flow count, representative flows, and responsible UID/FUID sets.</p>
       </section>
 
-      <section id="walkthrough">
-        <h2>11. Full example: a sudden DNS burst</h2>
-        <div class="example-flow">
-          <div class="phase">
-            <h3>Historical behavior</h3>
-            <p>One workstation produced these DNS counts in seven active five-minute windows:</p>
-            <pre>8, 9, 10, 10, 11, 12, 10</pre>
-            <p>After <code>ln(1+x)</code>, the historical median is approximately 2.398. MAD is approximately 0.087, so robust standard deviation is <code>1.4826 × 0.087 ≈ 0.129</code>.</p>
-          </div>
-          <div class="phase alert">
-            <h3>Current behavior</h3>
-            <p>The workstation now produces 50 DNS records. Its transformed value is:</p>
-            <pre>ln(1 + 50) ≈ 3.932</pre>
-            <p>The robust z-score is approximately <code>|3.932 − 2.398| / 0.129 = 11.89</code>. This crosses a threshold of 3.5 and becomes a <code>flow_count</code> reason.</p>
-          </div>
-        </div>
-        <p>The same window may also show new peers, higher query entropy, more DGA-like queries, or more failures. Each crossing adds a separate reason and z-score. If HTTP or connection behavior is also anomalous for that IP, the global ensemble combines the independent evidence.</p>
-      </section>
-
       <section id="settings">
-        <h2>12. Settings that change detection</h2>
+        <h2>11. Settings that change detection</h2>
         <div class="table-wrap"><table>
           <thead><tr><th>Setting</th><th>Effect</th><th>Practical guidance</th></tr></thead>
           <tbody>
