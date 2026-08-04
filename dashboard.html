@@ -541,6 +541,7 @@
         const reasonDetails = reasons.map(reason => `<div class="reason"><div class="reason-title"><span>${esc(String(reason.feature || "method score").replaceAll("_"," "))}</span><span class="meta">raw score ${fmt(reason.score)} · threshold ${fmt(reason.threshold)}</span></div><p>${esc(reason.explanation || "")}</p>${renderTopFeatures(reason)}${reason.new_peer_ips?.length ? `<p><strong>New destinations:</strong> ${esc(reason.new_peer_ips.join(", "))}</p>` : ""}</div>`).join("");
         const uids = candidate.responsible_uids || [];
         const fuids = candidate.responsible_fuids || [];
+        const flows = candidate.responsible_flows || [];
         return `<article class="card method">
           <div class="card-head"><span class="badge">${esc(detectorNames[module.module] || module.label || module.module)}</span>
             <div><div class="headline">${esc(candidate.host || "Unknown IP")} · ${esc(stream)}</div><div class="meta">window ${fmt(start)}–${fmt(end)} · ${reasons.length} reason${reasons.length === 1 ? "" : "s"}</div></div>
@@ -553,7 +554,7 @@
               <div class="finding-fact"><small>Detection ID</small><code>${esc(candidate.detection_id)}</code></div>
             </div>
             ${reasonDetails}
-            <div class="reason"><strong>Responsible identifiers</strong><p>UIDs: ${uids.length ? uids.map(uid => `<code>${esc(uid)}</code>`).join(" ") : "none reported"}<br>FUIDs: ${fuids.length ? fuids.map(fuid => `<code>${esc(fuid)}</code>`).join(" ") : "none reported"}</p></div>
+            <div class="reason"><strong>Responsible identifiers</strong><p>UIDs: ${uids.length ? uids.map(uid => `<code>${esc(uid)}</code>`).join(" ") : "none reported"}<br>FUIDs: ${fuids.length ? fuids.map(fuid => `<code>${esc(fuid)}</code>`).join(" ") : "none reported"}</p>${flows.length ? renderFlows(flows,candidate.responsible_flow_count) : `<p>No representative flow records were available for this finding.</p>`}</div>
           </div></article>`;
       }).join("");
       $("results").innerHTML = `<section class="chart-panel"><div class="chart-head"><h2>Optional detector findings</h2><span>Explore each method independently</span></div>${filterBar}${introduction}${cards || `<div class="empty">This detector produced no findings in the current run.</div>`}</section>`;
