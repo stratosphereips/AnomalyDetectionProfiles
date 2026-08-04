@@ -42,16 +42,19 @@ required protocols          = ceil(configured minimum / sensitivity)
 Thus values above `1.0` produce more anomalies and values below `1.0` produce
 fewer. Sensitivity affects both per-protocol decisions and final global-IP
 decisions. `window_seconds` sets the aggregation interval and defaults to
-`3600`. Training counts observed windows for each IP/protocol model, not
-wall-clock time. The legacy `training_hours` key therefore means training
-windows when the configured window is not one hour.
+`3600`. `training_hours` is one wall-clock interval shared by every model. It
+begins at the timestamp of the first analyzed record and ends exactly
+`training_hours * 3600` seconds later. Only records in this half-open interval
+are trusted training traffic. The interval does not restart for a protocol or
+destination that appears later, and a window crossing the cutoff is split at
+the cutoff.
 
 Zero has a specific cold-start meaning. With `training_hours = 0`, every
-bucket is labeled as detection, but a feature z-score remains zero until its
+window is labeled as detection, but a feature z-score remains zero until its
 model has `minimum_points` prior observations. Those early observations update
-the model through EWMA. Consequently, the earliest statistically eligible
-bucket for an independent model is
-`max(training_hours, minimum_points) + 1`. Zero training also prevents
+the model through EWMA. Consequently, with zero training, the earliest
+statistically eligible window for an independent model is
+`minimum_points + 1`. Zero training also prevents
 empirical threshold calibration because no values are recorded as benign
 training values; configured fallback thresholds remain active. Specialized
 SSL novelty is an exception: a first-seen server or JA3S can create an
@@ -60,9 +63,11 @@ immediate SSL-flow alert, but that alert does not vote in the global ensemble.
 `normal_dirs` provides a separate known-normal baseline. The detector fits all
 supported windows in those folders before analyzing the selected folder and
 then calibrates thresholds over the fitted observations. Baseline input is
-silent and excluded from analyzed-run statistics. Models remain keyed by IP
-and protocol: a selected-capture IP/protocol pair absent from the external
-baseline still follows `training_hours` and `minimum_points` normally.
+silent and excluded from analyzed-run statistics. The selected capture's one
+global initial training interval is then applied. A model absent from both the
+external baseline and that interval enters detection-phase cold start and
+must accumulate `minimum_points` prior observations before a nonzero
+statistical z-score is possible.
 
 For the complete equations and exact meanings of `value`, `mean`, `zscore`,
 protocol score, normalized contribution, global score, confidence, and EWMA
@@ -101,8 +106,9 @@ individual SSL-flow alerts are supporting evidence and do not vote.
 ## Per-protocol detection
 
 Records are sorted by traffic timestamp and grouped by source IP, protocol, and
-traffic window. The first configured number of observed windows for each
-IP/protocol pair are assumed benign when `training_hours` is greater than zero.
+traffic window. When `training_hours` is greater than zero, only records inside
+the single initial capture-wide interval are assumed benign. A protocol first
+appearing after the cutoff is never granted its own delayed training interval.
 
 Non-SSL protocols produce a common behavioral core:
 
