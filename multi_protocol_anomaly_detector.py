@@ -406,7 +406,7 @@ def importance_metrics(
 
 @dataclass
 class ProtocolBucket:
-    hour: int
+    hour: float
     events: int = 0
     peers: set[str] = field(default_factory=set)
     new_peers: set[str] = field(default_factory=set)
@@ -458,7 +458,7 @@ class ProtocolState:
         default_factory=lambda: defaultdict(set)
     )
     models: dict[str, AdaptiveStats] = field(default_factory=dict)
-    trained_hours: int = 0
+    trained_windows: int = 0
     calibrated: bool = False
     ssl_known_servers: set[str] = field(default_factory=set)
     ssl_known_ja3s: set[str] = field(default_factory=set)
@@ -471,7 +471,7 @@ class ProtocolState:
 
 @dataclass
 class TargetBucket:
-    hour: int
+    hour: float
     events: int = 0
     sources: set[str] = field(default_factory=set)
     new_sources: set[str] = field(default_factory=set)
@@ -489,7 +489,7 @@ class TargetState:
     known_sources: set[str] = field(default_factory=set)
     known_ports: set[str] = field(default_factory=set)
     models: dict[str, AdaptiveStats] = field(default_factory=dict)
-    trained_hours: int = 0
+    trained_windows: int = 0
     calibrated: bool = False
     anomaly_times: list[float] = field(default_factory=list)
 
@@ -598,6 +598,83 @@ class MultiProtocolDetector:
         self.ssl_conn_matches = 0
         self.force_training = False
         self.suppress_output = False
+        self.capture_start: Optional[float] = None
+        self.training_cutoff: Optional[float] = None
+
+    def initialize_capture_clock(self, timestamp: float) -> None:
+        """Set the one global training interval from the first capture record."""
+        if self.force_training or self.capture_start is not None:
+            return
+        self.capture_start = timestamp
+        self.training_cutoff = timestamp + self.args.training_hours * 3600
+        if self.args.training_hours > 0:
+            # External baseline models may already be calibrated. The selected
+            # capture's trusted prefix adds training values, so calibrate again
+            # when that single global interval ends.
+            for state in self.states.values():
+                state.calibrated = False
+            for state in self.target_states.values():
+                state.calibrated = False
+
+    def capture_window_start(self, timestamp: float) -> float:
+        """Return a regular window start, splitting exactly at training end."""
+        self.initialize_capture_clock(timestamp)
+        regular_start = bucket_start(timestamp, self.args.window_seconds)
+        cutoff = self.training_cutoff
+        if (
+            self.args.training_hours > 0
+            and cutoff is not None
+            and regular_start < cutoff <= timestamp
+        ):
+            return cutoff
+        return regular_start
+
+    def is_training_time(self, timestamp: float) -> bool:
+        """Whether a selected-capture timestamp is in the global prefix."""
+        if self.force_training:
+            return True
+        self.initialize_capture_clock(timestamp)
+        return bool(
+            self.args.training_hours > 0
+            and self.training_cutoff is not None
+            and timestamp < self.training_cutoff
+        )
+
+    def calibrate_protocol_state(
+        self, protocol: str, state: ProtocolState
+    ) -> None:
+        if state.calibrated:
+            return
+        for feature_name, model in state.models.items():
+            fallback = (
+                self.args.ssl_hourly_threshold
+                if protocol == "ssl"
+                and feature_name
+                in {
+                    "ssl_flows",
+                    "unique_servers",
+                    "new_servers",
+                    "ja3_changes",
+                    "known_server_avg_bytes",
+                }
+                else self.args.threshold
+            )
+            model.calibrate(fallback, self.args.threshold_quantile)
+        for model in state.ssl_server_models.values():
+            model.calibrate(
+                self.args.ssl_flow_threshold,
+                self.args.threshold_quantile,
+            )
+        state.calibrated = True
+
+    def calibrate_target_state(self, state: TargetState) -> None:
+        if state.calibrated:
+            return
+        for model in state.models.values():
+            model.calibrate(
+                self.args.threshold, self.args.threshold_quantile
+            )
+        state.calibrated = True
 
     def observe_derived_features(
         self,
@@ -845,10 +922,7 @@ class MultiProtocolDetector:
             "_known_server_bytes": total_bytes is not None and not new_server,
         }
 
-        detecting = (
-            not self.force_training
-            and state.trained_hours >= self.args.training_hours
-        )
+        detecting = not self.is_training_time(ts)
         reasons: list[dict[str, Any]] = []
         server_model = state.ssl_server_models.setdefault(
             server, AdaptiveStats()
@@ -929,7 +1003,7 @@ class MultiProtocolDetector:
                 "protocol": "ssl",
                 "host": host,
                 "ts": ts,
-                "window_start": bucket_start(ts, self.args.window_seconds),
+                "window_start": bucket.hour,
                 "window_seconds": self.args.window_seconds,
                 "uid": uid,
                 "server": server,
@@ -1256,7 +1330,7 @@ class MultiProtocolDetector:
         ts: float,
     ) -> None:
         state = self.target_states.setdefault(target, TargetState())
-        hour = bucket_start(ts, self.args.window_seconds)
+        hour = self.capture_window_start(ts)
         if state.bucket is None:
             state.bucket = TargetBucket(hour)
         elif state.bucket.hour != hour:
@@ -1320,10 +1394,9 @@ class MultiProtocolDetector:
         if bucket is None:
             return
         features = self.target_features(bucket)
-        training = (
-            self.force_training
-            or state.trained_hours < self.args.training_hours
-        )
+        training = self.is_training_time(bucket.hour)
+        if not training:
+            self.calibrate_target_state(state)
         reasons: list[dict[str, Any]] = []
         zscores: dict[str, float] = {}
         for name, value in features.items():
@@ -1374,7 +1447,7 @@ class MultiProtocolDetector:
                 "window_start": bucket.hour,
                 "window_seconds": self.args.window_seconds,
                 "phase": "training" if training else "detection",
-                "trained_hours": state.trained_hours,
+                "trained_windows": state.trained_windows,
                 "features": features,
                 "zscores": zscores,
                 "protocols": sorted(bucket.protocols),
@@ -1415,14 +1488,7 @@ class MultiProtocolDetector:
         if training:
             for name, value in features.items():
                 state.models[name].fit(transform(value))
-            state.trained_hours += 1
-            if (
-                state.trained_hours >= self.args.training_hours
-                and not state.calibrated
-            ):
-                for model in state.models.values():
-                    model.calibrate(self.args.threshold, self.args.threshold_quantile)
-                state.calibrated = True
+            state.trained_windows += 1
         else:
             alpha = (
                 self.args.drift_alpha
@@ -1442,12 +1508,14 @@ class MultiProtocolDetector:
     ) -> None:
         key = (host, protocol)
         state = self.states.setdefault(key, ProtocolState())
-        hour = bucket_start(ts, self.args.window_seconds)
+        hour = self.capture_window_start(ts)
         if state.bucket is None:
             state.bucket = ProtocolBucket(hour)
         elif state.bucket.hour != hour:
             self.finalize(host, protocol, state)
             state.bucket = ProtocolBucket(hour)
+        if not self.is_training_time(hour):
+            self.calibrate_protocol_state(protocol, state)
         bucket = state.bucket
         spec = PROTOCOL_FIELDS[protocol]
         ssl_flow = (
@@ -1686,10 +1754,9 @@ class MultiProtocolDetector:
         if bucket is None:
             return
         features = self.features(protocol, bucket)
-        training = (
-            self.force_training
-            or state.trained_hours < self.args.training_hours
-        )
+        training = self.is_training_time(bucket.hour)
+        if not training:
+            self.calibrate_protocol_state(protocol, state)
         reasons: list[dict[str, Any]] = []
         zscores: dict[str, float] = {}
         for name, value in features.items():
@@ -1754,7 +1821,7 @@ class MultiProtocolDetector:
             "window_start": bucket.hour,
             "window_seconds": self.args.window_seconds,
             "phase": "training" if training else "detection",
-            "trained_hours": state.trained_hours,
+            "trained_windows": state.trained_windows,
             "features": features,
             "zscores": zscores,
         }
@@ -1810,34 +1877,7 @@ class MultiProtocolDetector:
         if training:
             for name, value in features.items():
                 state.models[name].fit(transform(value))
-            state.trained_hours += 1
-            if (
-                state.trained_hours >= self.args.training_hours
-                and not state.calibrated
-            ):
-                for feature_name, model in state.models.items():
-                    fallback = (
-                        self.args.ssl_hourly_threshold
-                        if protocol == "ssl"
-                        and feature_name
-                        in {
-                            "ssl_flows",
-                            "unique_servers",
-                            "new_servers",
-                            "ja3_changes",
-                            "known_server_avg_bytes",
-                        }
-                        else self.args.threshold
-                    )
-                    model.calibrate(
-                        fallback, self.args.threshold_quantile
-                    )
-                for model in state.ssl_server_models.values():
-                    model.calibrate(
-                        self.args.ssl_flow_threshold,
-                        self.args.threshold_quantile,
-                    )
-                state.calibrated = True
+            state.trained_windows += 1
             mode = "training_fit"
         else:
             small = score <= self.args.adaptation_score
@@ -1874,39 +1914,9 @@ class MultiProtocolDetector:
     def calibrate_baseline(self) -> None:
         """Calibrate every model after explicitly normal traffic is fitted."""
         for (_, protocol), state in self.states.items():
-            for feature_name, model in state.models.items():
-                fallback = (
-                    self.args.ssl_hourly_threshold
-                    if protocol == "ssl"
-                    and feature_name
-                    in {
-                        "ssl_flows",
-                        "unique_servers",
-                        "new_servers",
-                        "ja3_changes",
-                        "known_server_avg_bytes",
-                    }
-                    else self.args.threshold
-                )
-                model.calibrate(fallback, self.args.threshold_quantile)
-            for model in state.ssl_server_models.values():
-                model.calibrate(
-                    self.args.ssl_flow_threshold,
-                    self.args.threshold_quantile,
-                )
-            state.calibrated = True
-            state.trained_hours = max(
-                state.trained_hours, self.args.training_hours
-            )
+            self.calibrate_protocol_state(protocol, state)
         for state in self.target_states.values():
-            for model in state.models.values():
-                model.calibrate(
-                    self.args.threshold, self.args.threshold_quantile
-                )
-            state.calibrated = True
-            state.trained_hours = max(
-                state.trained_hours, self.args.training_hours
-            )
+            self.calibrate_target_state(state)
 
     def reset_run_counters(self) -> None:
         """Keep learned state but exclude baseline input from run statistics."""
@@ -1922,7 +1932,7 @@ class MultiProtocolDetector:
             "GLOBAL IP ENSEMBLE",
             "Magenta=global anomaly, yellow=protocol contribution",
         )
-        grouped: dict[tuple[str, int], list[dict[str, Any]]] = defaultdict(list)
+        grouped: dict[tuple[str, float], list[dict[str, Any]]] = defaultdict(list)
         for anomaly in self.protocol_anomalies:
             grouped[(anomaly["host"], anomaly["hour_start"])].append(anomaly)
         for anomaly in self.target_anomalies:
@@ -2212,8 +2222,9 @@ def parser(
         type=int,
         default=settings["training_hours"],
         help=(
-            "initial observed windows fitted as benign per model; "
-            "0 skips explicit training but still requires --minimum-points"
+            "capture-wide benign prefix duration in hours, measured from the "
+            "first analyzed record; 0 skips explicit training but still "
+            "requires --minimum-points"
         ),
     )
     result.add_argument(
@@ -2453,7 +2464,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         "MULTI-PROTOCOL ANOMALY DETECTOR",
         f"input={args.zeek_dir} protocols={len(logs)} "
         f"config={args.config} sensitivity={args.sensitivity} "
-        f"training_windows={args.training_hours} "
+        f"training_hours={args.training_hours} "
         f"window_seconds={args.window_seconds} "
         f"normal_dirs={len(args.normal_dirs)}",
     )
@@ -2474,7 +2485,7 @@ def main(argv: Optional[list[str]] = None) -> int:
             "skipped_non_ip_logs": skipped,
             "configuration": str(args.config),
             "training_hours": args.training_hours,
-            "training_windows": args.training_hours,
+            "training_duration_seconds": args.training_hours * 3600,
             "window_seconds": args.window_seconds,
             "normal_dirs": [str(path) for path in args.normal_dirs],
             "sensitivity": args.sensitivity,
@@ -2514,6 +2525,17 @@ def main(argv: Optional[list[str]] = None) -> int:
         observations, _, _ = collect_observations(
             args.zeek_dir, args, detector
         )
+        if observations:
+            detector.initialize_capture_clock(observations[0][0])
+            output.write(
+                "events",
+                {
+                    "event": "training_interval",
+                    "capture_start": detector.capture_start,
+                    "training_cutoff": detector.training_cutoff,
+                    "training_hours": args.training_hours,
+                },
+            )
         process_observations(detector, observations)
         global_events = detector.ensemble()
         pipeline_context = PipelineContext(
@@ -2557,7 +2579,9 @@ def main(argv: Optional[list[str]] = None) -> int:
             )
         summary = {
             "window_seconds": args.window_seconds,
-            "training_windows": args.training_hours,
+            "training_hours": args.training_hours,
+            "training_start": detector.capture_start,
+            "training_end": detector.training_cutoff,
             "external_baseline_records": baseline_records,
             "records_processed": sum(detector.records_by_protocol.values()),
             "records_by_protocol": dict(sorted(detector.records_by_protocol.items())),
@@ -2610,7 +2634,7 @@ def main(argv: Optional[list[str]] = None) -> int:
             ("Source hosts", summary["hosts"]),
             ("Target IPs", summary["targets"]),
             ("Window seconds", args.window_seconds),
-            ("Training windows", args.training_hours),
+            ("Training hours", args.training_hours),
             ("External baseline records", summary["external_baseline_records"]),
             ("Sensitivity", args.sensitivity),
             ("Protocol anomalies", summary["protocol_anomalies"]),
