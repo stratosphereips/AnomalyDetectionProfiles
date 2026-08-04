@@ -28,6 +28,7 @@ class PipelineContext:
     target_anomalies: int
     ssl_flow_alerts: int
     global_anomalies: int
+    max_responsible_flows: int = 10
     core_detections: tuple[Mapping[str, Any], ...] = ()
     protocol_windows: tuple[Mapping[str, Any], ...] = ()
     target_windows: tuple[Mapping[str, Any], ...] = ()
@@ -277,6 +278,8 @@ class RobustMultivariateModule(ExperimentalModule):
                             "reasons": [],
                             "responsible_uids": [],
                             "responsible_fuids": [],
+                            "responsible_flow_count": 0,
+                            "responsible_flows": [],
                         },
                     )
                     candidate["score"] = max(
@@ -287,6 +290,16 @@ class RobustMultivariateModule(ExperimentalModule):
                     candidate["reasons"].append(reason)
                     candidate["responsible_uids"].extend(row.get("uids", ()))
                     candidate["responsible_fuids"].extend(row.get("fuids", ()))
+                    candidate["responsible_flow_count"] += int(
+                        row.get("responsible_flow_count", 0)
+                    )
+                    for original in row.get("responsible_flows", ()):
+                        flow = dict(original)
+                        flow["matched_features"] = sorted(
+                            set(flow.get("matched_features", ()))
+                            | {"joint_feature_relationship"}
+                        )
+                        candidate["responsible_flows"].append(flow)
                 history.append(current)
                 history = history[-self.history_limit :]
 
@@ -300,6 +313,17 @@ class RobustMultivariateModule(ExperimentalModule):
             candidate["responsible_fuids"] = sorted(
                 set(candidate["responsible_fuids"])
             )
+            unique_flows: dict[str, Mapping[str, Any]] = {}
+            for flow in candidate["responsible_flows"]:
+                key = str(
+                    flow.get("uid")
+                    or flow.get("fuid")
+                    or f'{flow.get("log")}:{flow.get("ts")}:{flow.get("dst")}'
+                )
+                unique_flows.setdefault(key, flow)
+            candidate["responsible_flows"] = list(unique_flows.values())[
+                : context.max_responsible_flows
+            ]
             candidates.append(candidate)
         candidates.sort(key=lambda item: (item["window_start"], item["host"]))
         all_uids = sorted(
@@ -405,6 +429,13 @@ def _candidate(
         "top_features": top_features[:5],
         "explanation": explanation,
     }
+    responsible_flows = []
+    for original in row.get("responsible_flows", ()):
+        flow = dict(original)
+        flow["matched_features"] = sorted(
+            set(flow.get("matched_features", ())) | {feature}
+        )
+        responsible_flows.append(flow)
     candidate = {
         "detection_id": f"{host}@{window_start:g}",
         "host": host,
@@ -414,6 +445,10 @@ def _candidate(
         "reasons": [reason],
         "responsible_uids": sorted(set(row.get("uids", ()))),
         "responsible_fuids": sorted(set(row.get("fuids", ()))),
+        "responsible_flow_count": int(
+            row.get("responsible_flow_count", len(responsible_flows))
+        ),
+        "responsible_flows": responsible_flows,
     }
     return reason, candidate
 
@@ -714,18 +749,37 @@ class GraphBehaviorModule(ExperimentalModule):
                     "peer_ips": set(),
                     "uids": set(),
                     "fuids": set(),
+                    "responsible_flow_count": 0,
+                    "responsible_flows": [],
                 },
             )
             combined["protocols"].add(str(row.get("protocol", "unknown")))
             combined["peer_ips"].update(peers)
             combined["uids"].update(row.get("uids", ()))
             combined["fuids"].update(row.get("fuids", ()))
+            combined["responsible_flow_count"] += int(
+                row.get("responsible_flow_count", 0)
+            )
+            combined["responsible_flows"].extend(
+                row.get("responsible_flows", ())
+            )
         streams: dict[str, list[Mapping[str, Any]]] = {}
         for combined in grouped.values():
             combined["protocol"] = ",".join(sorted(combined.pop("protocols")))
             combined["peer_ips"] = sorted(combined["peer_ips"])
             combined["uids"] = sorted(combined["uids"])
             combined["fuids"] = sorted(combined["fuids"])
+            unique_flows: dict[str, Mapping[str, Any]] = {}
+            for flow in combined["responsible_flows"]:
+                key = str(
+                    flow.get("uid")
+                    or flow.get("fuid")
+                    or f'{flow.get("log")}:{flow.get("ts")}:{flow.get("dst")}'
+                )
+                unique_flows.setdefault(key, flow)
+            combined["responsible_flows"] = list(unique_flows.values())[
+                : context.max_responsible_flows
+            ]
             streams.setdefault(str(combined["host"]), []).append(combined)
         for host, rows in streams.items():
             rows.sort(key=lambda row: float(row.get("window_start", 0)))
