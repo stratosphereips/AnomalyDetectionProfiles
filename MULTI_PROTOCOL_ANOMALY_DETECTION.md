@@ -8,7 +8,7 @@ python3 multi_protocol_anomaly_detector.py /path/to/zeek-logs \
   --normal-dir /path/to/known-normal-zeek-logs \
   --window-seconds 300 \
   --sensitivity 1.0 \
-  --training-hours 3
+  --training-windows 6
 ```
 
 The program requires Python 3.9 or newer and has no third-party dependencies.
@@ -28,7 +28,7 @@ All operating values are stored in
   flow path, and the global ensemble.
 
 Select a configuration with `--config PATH`. Command-line
-`--sensitivity` and `--training-hours` override `[common]`; this makes those
+`--sensitivity` and `--training-windows` override `[common]`; this makes those
 two experiment variables easy to sweep without editing a file.
 
 Sensitivity is positive, with `1.0` preserving configured thresholds:
@@ -42,14 +42,15 @@ required protocols          = ceil(configured minimum / sensitivity)
 Thus values above `1.0` produce more anomalies and values below `1.0` produce
 fewer. Sensitivity affects both per-protocol decisions and final global-IP
 decisions. `window_seconds` sets the aggregation interval and defaults to
-`3600`. `training_hours` is one wall-clock interval shared by every model. It
-begins at the timestamp of the first analyzed record and ends exactly
-`training_hours * 3600` seconds later. Only records in this half-open interval
-are trusted training traffic. The interval does not restart for a protocol or
-destination that appears later, and a window crossing the cutoff is split at
-the cutoff.
+`3600`. `training_windows` selects how many aggregation-window units form one
+global interval shared by every model. It begins at the timestamp of the first
+analyzed record and ends exactly `training_windows * window_seconds` seconds
+later. Only records in this half-open interval are trusted training traffic.
+The interval does not restart for a protocol or destination that appears
+later. Selected-capture windows are anchored at the first record, so window
+`training_windows + 1` starts exactly at the cutoff.
 
-Zero has a specific cold-start meaning. With `training_hours = 0`, every
+Zero has a specific cold-start meaning. With `training_windows = 0`, every
 window is labeled as detection, but a feature z-score remains zero until its
 model has `minimum_points` prior observations. Those early observations update
 the model through EWMA. Consequently, with zero training, the earliest
@@ -106,7 +107,7 @@ individual SSL-flow alerts are supporting evidence and do not vote.
 ## Per-protocol detection
 
 Records are sorted by traffic timestamp and grouped by source IP, protocol, and
-traffic window. When `training_hours` is greater than zero, only records inside
+traffic window. When `training_windows` is greater than zero, only records inside
 the single initial capture-wide interval are assumed benign. A protocol first
 appearing after the cutoff is never granted its own delayed training interval.
 
