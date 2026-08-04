@@ -7,6 +7,8 @@ they cannot change the core model, scores, or anomaly decisions.
 
 from __future__ import annotations
 
+import math
+import statistics
 from dataclasses import asdict, dataclass, field
 from typing import Any, Iterable, Mapping
 
@@ -26,6 +28,7 @@ class PipelineContext:
     ssl_flow_alerts: int
     global_anomalies: int
     core_detections: tuple[Mapping[str, Any], ...] = ()
+    protocol_windows: tuple[Mapping[str, Any], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -96,6 +99,231 @@ class CoreMirrorModule(ExperimentalModule):
 
     def evaluate(self, context: PipelineContext) -> ModuleEvidence:
         return ModuleEvidence(candidate_detections=context.core_detections)
+
+
+def _invert_matrix(matrix: list[list[float]]) -> list[list[float]]:
+    """Invert a small regularized matrix with Gauss-Jordan elimination."""
+
+    size = len(matrix)
+    augmented = [
+        row[:] + [1.0 if row_index == column else 0.0 for column in range(size)]
+        for row_index, row in enumerate(matrix)
+    ]
+    for column in range(size):
+        pivot = max(range(column, size), key=lambda row: abs(augmented[row][column]))
+        if abs(augmented[pivot][column]) < 1e-12:
+            raise ValueError("regularized covariance matrix is singular")
+        augmented[column], augmented[pivot] = augmented[pivot], augmented[column]
+        divisor = augmented[column][column]
+        augmented[column] = [value / divisor for value in augmented[column]]
+        for row in range(size):
+            if row == column:
+                continue
+            factor = augmented[row][column]
+            augmented[row] = [
+                current - factor * pivot_value
+                for current, pivot_value in zip(
+                    augmented[row], augmented[column]
+                )
+            ]
+    return [row[size:] for row in augmented]
+
+
+class RobustMultivariateModule(ExperimentalModule):
+    """Detect unusual joint feature patterns with robust Mahalanobis distance."""
+
+    module_id = "robust_multivariate_v1"
+    label = "Robust multivariate feature relationships"
+
+    def __init__(
+        self,
+        minimum_points: int = 8,
+        threshold: float = 3.0,
+        shrinkage: float = 0.5,
+        history_limit: int = 64,
+    ) -> None:
+        if minimum_points < 3 or threshold <= 0 or history_limit < minimum_points:
+            raise ValueError("invalid multivariate detector parameters")
+        if not 0.0 <= shrinkage <= 1.0:
+            raise ValueError("multivariate shrinkage must be between 0 and 1")
+        self.minimum_points = minimum_points
+        self.threshold = threshold
+        self.shrinkage = shrinkage
+        self.history_limit = history_limit
+
+    @staticmethod
+    def _vector(row: Mapping[str, Any], names: tuple[str, ...]) -> list[float]:
+        features = row.get("features", {})
+        return [math.log1p(max(0.0, float(features[name]))) for name in names]
+
+    def _score(
+        self,
+        history: list[list[float]],
+        current: list[float],
+        names: tuple[str, ...],
+    ) -> tuple[float, list[dict[str, Any]]]:
+        dimensions = len(names)
+        centers = [statistics.median(column) for column in zip(*history)]
+        scales = []
+        for index, center in enumerate(centers):
+            deviations = [abs(row[index] - center) for row in history]
+            scales.append(max(0.05, 1.4826 * statistics.median(deviations)))
+        standardized = [
+            [(row[index] - centers[index]) / scales[index] for index in range(dimensions)]
+            for row in history
+        ]
+        means = [statistics.fmean(column) for column in zip(*standardized)]
+        denominator = max(1, len(standardized) - 1)
+        covariance = [
+            [
+                sum(
+                    (row[left] - means[left]) * (row[right] - means[right])
+                    for row in standardized
+                )
+                / denominator
+                for right in range(dimensions)
+            ]
+            for left in range(dimensions)
+        ]
+        regularized = []
+        for left in range(dimensions):
+            regularized_row = []
+            for right in range(dimensions):
+                if left == right:
+                    value = max(covariance[left][left], 0.05) + 0.05
+                else:
+                    value = (1.0 - self.shrinkage) * covariance[left][right]
+                regularized_row.append(value)
+            regularized.append(regularized_row)
+        inverse = _invert_matrix(regularized)
+        delta = [
+            (current[index] - centers[index]) / scales[index] - means[index]
+            for index in range(dimensions)
+        ]
+        projected = [
+            sum(inverse[row][column] * delta[column] for column in range(dimensions))
+            for row in range(dimensions)
+        ]
+        squared_distance = max(
+            0.0, sum(delta[index] * projected[index] for index in range(dimensions))
+        )
+        score = math.sqrt(squared_distance / max(1, dimensions))
+        feature_contributions = sorted(
+            (
+                {
+                    "feature": names[index],
+                    "standardized_deviation": round(delta[index], 4),
+                    "distance_contribution": round(
+                        abs(delta[index] * projected[index]), 4
+                    ),
+                }
+                for index in range(dimensions)
+            ),
+            key=lambda item: item["distance_contribution"],
+            reverse=True,
+        )
+        return score, feature_contributions[:5]
+
+    def evaluate(self, context: PipelineContext) -> ModuleEvidence:
+        streams: dict[tuple[str, str], list[Mapping[str, Any]]] = {}
+        for row in context.protocol_windows:
+            key = (str(row.get("host", "")), str(row.get("protocol", "")))
+            if all(key):
+                streams.setdefault(key, []).append(row)
+
+        candidates_by_id: dict[str, dict[str, Any]] = {}
+        reasons: list[Mapping[str, Any]] = []
+        eligible_windows = 0
+        for (host, protocol), rows in streams.items():
+            if not rows:
+                continue
+            feature_names = tuple(sorted(rows[0].get("features", {})))
+            if len(feature_names) < 2:
+                continue
+            history: list[list[float]] = []
+            for row in rows:
+                current = self._vector(row, feature_names)
+                trusted = bool(row.get("external_baseline")) or row.get("phase") == "training"
+                if trusted or len(history) < self.minimum_points:
+                    history.append(current)
+                    history = history[-self.history_limit :]
+                    continue
+                eligible_windows += 1
+                score, top = self._score(history, current, feature_names)
+                if score >= self.threshold:
+                    window_start = int(row.get("window_start", row.get("hour_start", 0)))
+                    detection_id = f"{host}@{window_start}"
+                    reason = {
+                        "feature": "joint_feature_relationship",
+                        "host": host,
+                        "protocol": protocol,
+                        "window_start": window_start,
+                        "window_seconds": context.window_seconds,
+                        "score": round(score, 4),
+                        "threshold": self.threshold,
+                        "top_features": top,
+                        "explanation": (
+                            "The feature combination is far from this host/protocol's "
+                            "regularized multivariate baseline."
+                        ),
+                    }
+                    reasons.append(reason)
+                    candidate = candidates_by_id.setdefault(
+                        detection_id,
+                        {
+                            "detection_id": detection_id,
+                            "host": host,
+                            "window_start": window_start,
+                            "score": 0.0,
+                            "protocols": [],
+                            "reasons": [],
+                            "responsible_uids": [],
+                            "responsible_fuids": [],
+                        },
+                    )
+                    candidate["score"] = max(
+                        float(candidate["score"]),
+                        1.0 - math.exp(-score / self.threshold),
+                    )
+                    candidate["protocols"].append(protocol)
+                    candidate["reasons"].append(reason)
+                    candidate["responsible_uids"].extend(row.get("uids", ()))
+                    candidate["responsible_fuids"].extend(row.get("fuids", ()))
+                history.append(current)
+                history = history[-self.history_limit :]
+
+        candidates = []
+        for candidate in candidates_by_id.values():
+            candidate["score"] = round(float(candidate["score"]), 4)
+            candidate["protocols"] = sorted(set(candidate["protocols"]))
+            candidate["responsible_uids"] = sorted(
+                set(candidate["responsible_uids"])
+            )
+            candidate["responsible_fuids"] = sorted(
+                set(candidate["responsible_fuids"])
+            )
+            candidates.append(candidate)
+        candidates.sort(key=lambda item: (item["window_start"], item["host"]))
+        all_uids = sorted(
+            {uid for candidate in candidates for uid in candidate["responsible_uids"]}
+        )
+        all_fuids = sorted(
+            {fuid for candidate in candidates for fuid in candidate["responsible_fuids"]}
+        )
+        top_features = [
+            feature
+            for reason in reasons
+            for feature in reason.get("top_features", ())
+        ][:10]
+        return ModuleEvidence(
+            score=max((float(reason["score"]) for reason in reasons), default=0.0),
+            eligible=eligible_windows > 0,
+            reasons=tuple(reasons),
+            responsible_uids=tuple(all_uids),
+            responsible_fuids=tuple(all_fuids),
+            top_features=tuple(top_features),
+            candidate_detections=tuple(candidates),
+        )
 
 
 class ExperimentalPipeline:
