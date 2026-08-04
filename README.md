@@ -47,6 +47,11 @@ default and is deliberately restricted to **Off** or **Shadow**: its candidates
 are visible in Pipeline comparison but cannot alter core anomalies. It requires
 no NumPy, scikit-learn, model download, or external API.
 
+In the dashboard, only the locked statistical core is **Active**. **Shadow**
+means a safe dry run with zero official effect; **Off** means the module is not
+executed. The normalized multivariate display score is not a probability or
+confidence value—the raw joint distance is what is compared with the threshold.
+
 The left-side importance controls filter low/medium/high/critical anomalies
 and change ranking between composite importance, total anomaly score,
 threshold excess, protocol breadth, and reason count. Flow and protocol-window
