@@ -2342,16 +2342,15 @@ def parser(
     )
     result.add_argument(
         "--experimental-noop-mode",
-        choices=("off", "shadow", "active"),
+        choices=("off", "shadow"),
         default=settings["experimental_noop_mode"],
         help=(
-            "no-op experimental pipeline module: off, shadow (compute without "
-            "influence), or active (eligible to influence; this no-op contributes zero)"
+            "no-op experimental pipeline validation: off or shadow"
         ),
     )
     result.add_argument(
         "--experimental-mirror-mode",
-        choices=("off", "shadow", "active"),
+        choices=("off", "shadow"),
         default=settings["experimental_mirror_mode"],
         help=(
             "core-mirror validation module: compares identical host/window "
