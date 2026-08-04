@@ -645,9 +645,9 @@
         ${countMarks(globalCounts,270,"#cf7cff","global anomalies")}
         <text x="1180" y="18" text-anchor="end">Circle size represents count</text></svg>`;
       const scope = `${host||"all source IPs"}${target?` · target ${target}`:""} · ${protocol||"all protocols"} · windows ${minimum}–${maximum}`;
-      $("results").innerHTML = `<section class="chart-panel"><div class="chart-head"><h2>Traffic volume and per-protocol benign warmup</h2><span>${esc(scope)}</span></div>
+      $("results").innerHTML = `<section class="chart-panel"><div class="chart-head"><h2>Traffic volume and global benign training interval</h2><span>${esc(scope)}</span></div>
         ${volumeSvg}<div class="legend"><span><i style="background:#48a8ff"></i>Flows/records</span><span><i style="background:rgba(72,168,255,.35)"></i>Benign warmup window</span></div>
-        <div class="help" style="margin-top:10px">Each shaded band is an observed window fitted as benign for one protocol model. Later bands appear when that protocol first shows up later in the capture.</div></section>
+        <div class="help" style="margin-top:10px">Every shaded window contains traffic from the single capture-wide training interval. A protocol that first appears after that interval is not shaded and does not receive delayed training.</div></section>
         <section class="chart-panel"><div class="chart-head"><h2>Training, drift, and anomaly timeline</h2><span>Hover markers for details</span></div>
         ${eventSvg}<div class="legend"><span><i style="background:#48a8ff"></i>Training fit</span><span><i style="background:#35d1d1"></i>Baseline update</span>
         <span><i style="background:#f5b942"></i>Drift update</span><span><i style="background:#ff657a"></i>Suspicious / SSL flow alert</span>
@@ -679,8 +679,11 @@
       const totalHours = Number(state.capture.duration_hours || 0);
       const totalSeconds = Number(state.capture.duration_seconds || 0);
       const windowSeconds = Number(state.capture.window_seconds || analysisWindowSeconds());
-      target.textContent = `· reference capture: ${totalHours.toFixed(1)} h total · ${state.capture.active_traffic_windows} active ${windowSeconds.toLocaleString()}-s windows`;
-      target.title = `${state.capture.records} timestamped records; ${state.capture.active_traffic_windows} active windows across a ${state.capture.traffic_window_span}-window span (${Math.round(totalSeconds).toLocaleString()} s capture duration)`;
+      const trainingHours = Number(state.config?.common?.training_hours || 0);
+      const trainingStart = Number(state.capture.first_ts || 0);
+      const trainingEnd = trainingStart + trainingHours * 3600;
+      target.textContent = `· one global interval: first ${trainingHours.toLocaleString()} h · ${trainingStart} ≤ timestamp < ${trainingEnd}`;
+      target.title = `${totalHours.toFixed(1)} h capture; ${state.capture.records} timestamped records; training is based on elapsed capture time, not on when each protocol first appears (${Math.round(totalSeconds).toLocaleString()} s capture duration; ${windowSeconds.toLocaleString()}-s aggregation windows)`;
     }
 
     async function saveConfig() {
