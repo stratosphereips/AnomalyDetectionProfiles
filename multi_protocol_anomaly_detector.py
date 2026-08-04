@@ -17,9 +17,14 @@ from configuration import load_settings
 from detection_core import AdaptiveStats, ZeekReader, clean, number
 from experimental_pipeline import (
     CoreMirrorModule,
+    ChangePointModule,
     ExperimentalPipeline,
+    GraphBehaviorModule,
+    IsolationForestModule,
     NoOpModule,
+    PCAModule,
     PipelineContext,
+    RarityModule,
     RobustMultivariateModule,
     pipeline_summary,
 )
@@ -71,6 +76,29 @@ MULTI_DEFAULTS = {
     "multivariate_threshold": 3.0,
     "multivariate_shrinkage": 0.5,
     "multivariate_history_limit": 64,
+    "experimental_pca_mode": "shadow",
+    "pca_minimum_points": 8,
+    "pca_threshold": 2.5,
+    "pca_components": 2,
+    "pca_history_limit": 64,
+    "experimental_isolation_mode": "shadow",
+    "isolation_minimum_points": 8,
+    "isolation_threshold": 0.65,
+    "isolation_trees": 32,
+    "isolation_history_limit": 64,
+    "experimental_rarity_mode": "shadow",
+    "rarity_minimum_points": 8,
+    "rarity_threshold": 1.0,
+    "rarity_history_limit": 64,
+    "experimental_change_mode": "shadow",
+    "change_minimum_points": 8,
+    "change_threshold": 3.0,
+    "change_recent_windows": 3,
+    "change_history_limit": 64,
+    "experimental_graph_mode": "shadow",
+    "graph_minimum_points": 6,
+    "graph_threshold": 0.65,
+    "graph_history_limit": 64,
 }
 
 # Protocol-specific categorical novelty, numeric volume, and failure signals.
@@ -593,6 +621,7 @@ class MultiProtocolDetector:
         self.target_anomalies: list[dict[str, Any]] = []
         self.flow_anomalies: list[dict[str, Any]] = []
         self.protocol_window_rows: list[dict[str, Any]] = []
+        self.target_window_rows: list[dict[str, Any]] = []
         self.records_by_protocol: dict[str, int] = defaultdict(int)
         self.skipped_no_ip: dict[str, int] = defaultdict(int)
         self.ssl_conn_matches = 0
@@ -1436,23 +1465,30 @@ class MultiProtocolDetector:
                         "explanation": explanation,
                     }
                 )
+        target_data_event = {
+            "event": "target_hourly_data",
+            "target": target,
+            "host": target,
+            "hour_start": bucket.hour,
+            "window_start": bucket.hour,
+            "window_seconds": self.args.window_seconds,
+            "phase": "training" if training else "detection",
+            "trained_windows": state.trained_windows,
+            "features": features,
+            "zscores": zscores,
+            "protocols": sorted(bucket.protocols),
+        }
+        target_identifiers = flow_identifier_fields(bucket.flow_records)
+        self.target_window_rows.append(
+            {
+                **target_data_event,
+                "external_baseline": self.force_training,
+                "uids": target_identifiers["responsible_uids"],
+                "fuids": target_identifiers["responsible_fuids"],
+            }
+        )
         if not self.suppress_output:
-            self.output.write(
-                "target_data",
-                {
-                "event": "target_hourly_data",
-                "target": target,
-                "host": target,
-                "hour_start": bucket.hour,
-                "window_start": bucket.hour,
-                "window_seconds": self.args.window_seconds,
-                "phase": "training" if training else "detection",
-                "trained_windows": state.trained_windows,
-                "features": features,
-                "zscores": zscores,
-                "protocols": sorted(bucket.protocols),
-                },
-            )
+            self.output.write("target_data", target_data_event)
         score = sum(reason["zscore"] for reason in reasons)
         if reasons:
             (
@@ -1832,6 +1868,13 @@ class MultiProtocolDetector:
                 "external_baseline": self.force_training,
                 "uids": identifiers["responsible_uids"],
                 "fuids": identifiers["responsible_fuids"],
+                "peer_ips": sorted(
+                    {
+                        clean(flow.get("dst"))
+                        for flow in bucket.flow_records
+                        if clean(flow.get("dst"))
+                    }
+                ),
             }
         )
         if not self.suppress_output:
@@ -1927,7 +1970,7 @@ class MultiProtocolDetector:
         self.target_anomalies.clear()
         self.flow_anomalies.clear()
 
-    def ensemble(self) -> list[dict[str, Any]]:
+    def ensemble(self, write_output: bool = True) -> list[dict[str, Any]]:
         self.output.reporter.section(
             "GLOBAL IP ENSEMBLE",
             "Magenta=global anomaly, yellow=protocol contribution",
@@ -2079,8 +2122,89 @@ class MultiProtocolDetector:
                 : self.args.max_responsible_flows
             ]
             global_events.append(event)
-            self.output.write("global", event)
+            if write_output:
+                self.output.write("global", event)
         return global_events
+
+
+def detection_id(host: str, window_start: Any) -> str:
+    """Return the stable host/window key shared by core and add-on modules."""
+
+    return f"{host}@{float(window_start):g}"
+
+
+def merge_active_detections(
+    core_events: list[dict[str, Any]],
+    module_results: list[Any],
+    window_seconds: int,
+) -> list[dict[str, Any]]:
+    """Add active-module findings without removing or weakening core findings."""
+
+    official = [dict(event) for event in core_events]
+    by_id = {
+        detection_id(event["host"], event["window_start"]): event
+        for event in official
+    }
+    for result in module_results:
+        if result.mode != "active" or result.status != "ready":
+            continue
+        for candidate in result.candidate_detections:
+            candidate_id = str(candidate.get("detection_id", ""))
+            if not candidate_id:
+                continue
+            module_finding = {
+                "module": result.module,
+                "label": result.label,
+                "score": float(candidate.get("score", 0.0)),
+                "protocols": list(candidate.get("protocols", ())),
+                "reasons": list(candidate.get("reasons", ())),
+            }
+            if candidate_id in by_id:
+                event = by_id[candidate_id]
+                event.setdefault("decision_sources", ["core_statistical_v1"])
+                if result.module not in event["decision_sources"]:
+                    event["decision_sources"].append(result.module)
+                event.setdefault("experimental_detections", []).append(module_finding)
+                continue
+
+            host = str(candidate.get("host", ""))
+            window_start = float(candidate.get("window_start", 0.0))
+            score = max(0.0, min(1.0, float(candidate.get("score", 0.0))))
+            reasons = list(candidate.get("reasons", ()))
+            protocols = sorted(set(candidate.get("protocols", ())))
+            event = {
+                "event": "global_anomaly",
+                "host": host,
+                "hour_start": window_start,
+                "window_start": window_start,
+                "window_seconds": window_seconds,
+                "global_score": round(score, 4),
+                "confidence": (
+                    "high" if score >= 0.8 else "medium" if score >= 0.55 else "low"
+                ),
+                "protocols": protocols,
+                "protocol_contributions": {},
+                "corroboration_bonus": 0.0,
+                "uid_corroboration_bonus": 0.0,
+                "shared_uids": [],
+                "shared_fuids": [],
+                "responsible_uids": sorted(set(candidate.get("responsible_uids", ()))),
+                "responsible_fuids": sorted(set(candidate.get("responsible_fuids", ()))),
+                "responsible_flow_count": 0,
+                "responsible_flows": [],
+                "protocol_anomalies": [],
+                "target_anomalies": [],
+                "reasons": reasons,
+                "decision_sources": [result.module],
+                "experimental_detections": [module_finding],
+            }
+            event.update(
+                importance_metrics(reasons, score, protocol_count=len(protocols))
+            )
+            official.append(event)
+            by_id[candidate_id] = event
+    official.sort(key=lambda event: (float(event["window_start"]), event["host"]))
+    return official
 
 
 Observation = tuple[float, str, dict[str, Any], str, str]
@@ -2370,9 +2494,9 @@ def parser(
     )
     result.add_argument(
         "--experimental-multivariate-mode",
-        choices=("off", "shadow"),
+        choices=("off", "shadow", "active"),
         default=settings["experimental_multivariate_mode"],
-        help="robust multivariate detector; gated to off or shadow during evaluation",
+        help="robust multivariate detector: off, shadow comparison, or active additive detection",
     )
     result.add_argument(
         "--multivariate-minimum-points",
@@ -2394,6 +2518,36 @@ def parser(
         type=int,
         default=settings["multivariate_history_limit"],
     )
+    for option, default_key in (
+        ("pca", "experimental_pca_mode"),
+        ("isolation", "experimental_isolation_mode"),
+        ("rarity", "experimental_rarity_mode"),
+        ("change", "experimental_change_mode"),
+        ("graph", "experimental_graph_mode"),
+    ):
+        result.add_argument(
+            f"--experimental-{option}-mode",
+            choices=("off", "shadow", "active"),
+            default=settings[default_key],
+        )
+    result.add_argument("--pca-minimum-points", type=int, default=settings["pca_minimum_points"])
+    result.add_argument("--pca-threshold", type=float, default=settings["pca_threshold"])
+    result.add_argument("--pca-components", type=int, default=settings["pca_components"])
+    result.add_argument("--pca-history-limit", type=int, default=settings["pca_history_limit"])
+    result.add_argument("--isolation-minimum-points", type=int, default=settings["isolation_minimum_points"])
+    result.add_argument("--isolation-threshold", type=float, default=settings["isolation_threshold"])
+    result.add_argument("--isolation-trees", type=int, default=settings["isolation_trees"])
+    result.add_argument("--isolation-history-limit", type=int, default=settings["isolation_history_limit"])
+    result.add_argument("--rarity-minimum-points", type=int, default=settings["rarity_minimum_points"])
+    result.add_argument("--rarity-threshold", type=float, default=settings["rarity_threshold"])
+    result.add_argument("--rarity-history-limit", type=int, default=settings["rarity_history_limit"])
+    result.add_argument("--change-minimum-points", type=int, default=settings["change_minimum_points"])
+    result.add_argument("--change-threshold", type=float, default=settings["change_threshold"])
+    result.add_argument("--change-recent-windows", type=int, default=settings["change_recent_windows"])
+    result.add_argument("--change-history-limit", type=int, default=settings["change_history_limit"])
+    result.add_argument("--graph-minimum-points", type=int, default=settings["graph_minimum_points"])
+    result.add_argument("--graph-threshold", type=float, default=settings["graph_threshold"])
+    result.add_argument("--graph-history-limit", type=int, default=settings["graph_history_limit"])
     result.add_argument(
         "-q", "--quiet", action="store_true", default=settings["quiet"]
     )
@@ -2446,6 +2600,24 @@ def main(argv: Optional[list[str]] = None) -> int:
         or args.multivariate_threshold <= 0
         or not 0 <= args.multivariate_shrinkage <= 1
         or args.multivariate_history_limit < args.multivariate_minimum_points
+        or args.pca_minimum_points < 3
+        or args.pca_threshold <= 0
+        or args.pca_components < 1
+        or args.pca_history_limit < args.pca_minimum_points
+        or args.isolation_minimum_points < 4
+        or not 0 < args.isolation_threshold < 1
+        or args.isolation_trees < 4
+        or args.isolation_history_limit < args.isolation_minimum_points
+        or args.rarity_minimum_points < 4
+        or args.rarity_threshold <= 0
+        or args.rarity_history_limit < args.rarity_minimum_points
+        or args.change_minimum_points < args.change_recent_windows + 3
+        or args.change_threshold <= 0
+        or args.change_recent_windows < 2
+        or args.change_history_limit < args.change_minimum_points
+        or args.graph_minimum_points < 3
+        or not 0 < args.graph_threshold <= 1
+        or args.graph_history_limit < args.graph_minimum_points
     ):
         print("error: invalid detector parameters", file=sys.stderr)
         return 2
@@ -2494,6 +2666,11 @@ def main(argv: Optional[list[str]] = None) -> int:
             "experimental_noop_mode": args.experimental_noop_mode,
             "experimental_mirror_mode": args.experimental_mirror_mode,
             "experimental_multivariate_mode": args.experimental_multivariate_mode,
+            "experimental_pca_mode": args.experimental_pca_mode,
+            "experimental_isolation_mode": args.experimental_isolation_mode,
+            "experimental_rarity_mode": args.experimental_rarity_mode,
+            "experimental_change_mode": args.experimental_change_mode,
+            "experimental_graph_mode": args.experimental_graph_mode,
         },
     )
     try:
@@ -2539,7 +2716,7 @@ def main(argv: Optional[list[str]] = None) -> int:
                 },
             )
         process_observations(detector, observations)
-        global_events = detector.ensemble()
+        core_global_events = detector.ensemble(write_output=False)
         pipeline_context = PipelineContext(
             records_processed=sum(detector.records_by_protocol.values()),
             window_seconds=args.window_seconds,
@@ -2547,17 +2724,18 @@ def main(argv: Optional[list[str]] = None) -> int:
             protocol_anomalies=len(detector.protocol_anomalies),
             target_anomalies=len(detector.target_anomalies),
             ssl_flow_alerts=len(detector.flow_anomalies),
-            global_anomalies=len(global_events),
+            global_anomalies=len(core_global_events),
             core_detections=tuple(
                 {
-                    "detection_id": f'{event["host"]}@{event["hour_start"]}',
+                    "detection_id": detection_id(event["host"], event["hour_start"]),
                     "host": event["host"],
                     "window_start": event["hour_start"],
                     "score": event["global_score"],
                 }
-                for event in global_events
+                for event in core_global_events
             ),
             protocol_windows=tuple(detector.protocol_window_rows),
+            target_windows=tuple(detector.target_window_rows),
         )
         module_results = ExperimentalPipeline(
             [
@@ -2572,6 +2750,49 @@ def main(argv: Optional[list[str]] = None) -> int:
                     ),
                     args.experimental_multivariate_mode,
                 ),
+                (
+                    PCAModule(
+                        minimum_points=args.pca_minimum_points,
+                        threshold=args.pca_threshold,
+                        components=args.pca_components,
+                        history_limit=args.pca_history_limit,
+                    ),
+                    args.experimental_pca_mode,
+                ),
+                (
+                    IsolationForestModule(
+                        minimum_points=args.isolation_minimum_points,
+                        threshold=args.isolation_threshold,
+                        trees=args.isolation_trees,
+                        history_limit=args.isolation_history_limit,
+                    ),
+                    args.experimental_isolation_mode,
+                ),
+                (
+                    RarityModule(
+                        minimum_points=args.rarity_minimum_points,
+                        threshold=args.rarity_threshold,
+                        history_limit=args.rarity_history_limit,
+                    ),
+                    args.experimental_rarity_mode,
+                ),
+                (
+                    ChangePointModule(
+                        minimum_points=args.change_minimum_points,
+                        threshold=args.change_threshold,
+                        recent_windows=args.change_recent_windows,
+                        history_limit=args.change_history_limit,
+                    ),
+                    args.experimental_change_mode,
+                ),
+                (
+                    GraphBehaviorModule(
+                        minimum_points=args.graph_minimum_points,
+                        threshold=args.graph_threshold,
+                        history_limit=args.graph_history_limit,
+                    ),
+                    args.experimental_graph_mode,
+                ),
             ]
         ).run(pipeline_context)
         for module_result in module_results:
@@ -2579,6 +2800,11 @@ def main(argv: Optional[list[str]] = None) -> int:
                 "events",
                 {"event": "experimental_module_result", **module_result.to_dict()},
             )
+        global_events = merge_active_detections(
+            core_global_events, module_results, args.window_seconds
+        )
+        for event in global_events:
+            output.write("global", event)
         summary = {
             "window_seconds": args.window_seconds,
             "training_windows": args.training_windows,
@@ -2595,6 +2821,10 @@ def main(argv: Optional[list[str]] = None) -> int:
             "ssl_flow_alerts": len(detector.flow_anomalies),
             "ssl_conn_matches": detector.ssl_conn_matches,
             "global_anomalies": len(global_events),
+            "core_global_anomalies": len(core_global_events),
+            "active_module_added_anomalies": (
+                len(global_events) - len(core_global_events)
+            ),
             "hosts": len({host for host, _ in detector.states}),
             "targets": len(detector.target_states),
             "pipeline": pipeline_summary(module_results),
@@ -2644,6 +2874,11 @@ def main(argv: Optional[list[str]] = None) -> int:
             ("Independent SSL flow alerts", summary["ssl_flow_alerts"]),
             ("SSL/conn UID matches", summary["ssl_conn_matches"]),
             ("Global anomalies", summary["global_anomalies"]),
+            ("Core global anomalies", summary["core_global_anomalies"]),
+            (
+                "Added by active optional detectors",
+                summary["active_module_added_anomalies"],
+            ),
             (
                 "Anomalies by protocol",
                 ", ".join(
