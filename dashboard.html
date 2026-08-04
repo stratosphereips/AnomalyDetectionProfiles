@@ -83,8 +83,8 @@
     .mode-guide { display: grid; grid-template-columns: repeat(3,1fr); gap: 8px; margin: 6px 0 10px; }
     .mode-guide div { padding: 9px 12px; border: 1px solid var(--line); border-radius: 9px; background: #081522; color: var(--muted); font-size: 11px; }
     .mode-guide strong { color: var(--text); }
-    .tabs { display: flex; gap: 5px; border-bottom: 1px solid var(--line); margin-bottom: 14px; }
-    .tab { border: 0; border-radius: 7px 7px 0 0; background: transparent; color: var(--muted); padding: 10px 15px; }
+    .tabs { display: flex; gap: 5px; overflow-x: auto; border-bottom: 1px solid var(--line); margin-bottom: 14px; }
+    .tab { flex: 0 0 auto; border: 0; border-radius: 7px 7px 0 0; background: transparent; color: var(--muted); padding: 10px 15px; }
     .tab.active { color: var(--text); background: var(--panel); box-shadow: inset 0 -2px var(--blue); }
     .count { display: inline-block; margin-left: 6px; min-width: 20px; padding: 1px 6px; border-radius: 20px;
       background: #1b3452; color: #bed5ec; font-size: 10px; text-align: center; }
@@ -139,6 +139,15 @@
     .importance-medium { color: #77c8ff; border-color: #2876a8; background: rgba(72,168,255,.12); }
     .importance-high { color: #ffd477; border-color: #8d6a22; background: rgba(245,185,66,.12); }
     .importance-critical { color: #ff91a0; border-color: #984052; background: rgba(255,101,122,.13); }
+    .method-filters { display: flex; flex-wrap: wrap; gap: 7px; margin-bottom: 12px; }
+    .method-filter { border: 1px solid var(--line); border-radius: 16px; padding: 6px 10px; color: var(--muted); background: #081522; font-size: 11px; }
+    .method-filter.active { color: var(--text); border-color: #397fb7; background: rgba(72,168,255,.14); }
+    .method-filter .count { margin-left: 4px; }
+    .card.method { border-left-color: var(--blue); }
+    .method .badge { background: var(--blue); }
+    .finding-summary { display: grid; grid-template-columns: repeat(4,minmax(130px,1fr)); gap: 8px; margin-top: 10px; }
+    .finding-fact { padding: 9px 10px; border: 1px solid #1d3653; border-radius: 8px; background: #091727; }
+    .finding-fact small { display: block; color: var(--muted); margin-bottom: 3px; text-transform: uppercase; letter-spacing: .6px; }
     .chart-panel { background: var(--panel); border: 1px solid var(--line); border-radius: 12px;
       padding: 15px 16px; margin-bottom: 14px; box-shadow: var(--shadow); }
     .chart-head { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 8px; }
@@ -230,6 +239,7 @@
         <button class="tab" data-tab="flow">SSL flow alerts <span id="flowCount" class="count">0</span></button>
         <button class="tab" data-tab="data">Window data <span id="dataCount" class="count">0</span></button>
         <button class="tab" data-tab="targetdata">Target window data <span id="targetDataCount" class="count">0</span></button>
+        <button class="tab" data-tab="methods">Detector findings <span id="methodCount" class="count">0</span></button>
         <button class="tab" data-tab="comparison">Pipeline comparison</button>
         <button class="tab" data-tab="log">Run log</button>
         <button class="tab" data-tab="docs">Documentation</button>
@@ -251,7 +261,7 @@
   </dialog>
 
   <script>
-    const state = { defaults: null, config: null, result: null, docs: null, tab: "graphs", browsePath: "", timer: null, inspectTimer: null, running: false, pendingRun: false,
+    const state = { defaults: null, config: null, result: null, docs: null, tab: "graphs", method: "all", browsePath: "", timer: null, inspectTimer: null, running: false, pendingRun: false,
       ranking: {global:"importance_score", protocol:"total_score", target:"importance_score", flow:"total_score", data:"hour_start", targetdata:"hour_start"} };
     const $ = id => document.getElementById(id);
     const esc = value => String(value ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
@@ -400,6 +410,7 @@
       $("flowCount").textContent = r.flow_anomalies.length;
       $("dataCount").textContent = r.hourly_data.length;
       $("targetDataCount").textContent = r.target_hourly_data.length;
+      $("methodCount").textContent = detectorFindingEntries().length;
       populateFilters();
       updateCaptureReference();
       renderResults();
@@ -472,13 +483,81 @@
     function renderResults() {
       if (state.tab === "docs") { $("toolbar").style.display = "none"; renderDocs(); return; }
       if (!state.result) return renderEmpty();
-      $("toolbar").style.display = ["log","comparison"].includes(state.tab) ? "none" : "grid";
+      $("toolbar").style.display = ["log","comparison","methods"].includes(state.tab) ? "none" : "grid";
       if (state.tab === "log") { $("results").innerHTML = `<pre>${esc(state.result.human_log)}</pre>`; return; }
       if (state.tab === "comparison") { renderPipelineComparison(); return; }
+      if (state.tab === "methods") { renderDetectorFindings(); return; }
       if (state.tab === "graphs") { renderGraphs(); return; }
       const rows = currentRows();
       if (!rows.length) { $("results").innerHTML = `<div class="empty">No matching records for this view.</div>`; return; }
       $("results").innerHTML = rows.map(renderCard).join("");
+      document.querySelectorAll(".card-head").forEach(head => head.addEventListener("click", () => head.parentElement.classList.toggle("open")));
+    }
+
+    const detectorNames = {
+      robust_multivariate_v1: "Multivariate",
+      pca_reconstruction_v1: "PCA",
+      isolation_forest_v1: "Isolation Forest",
+      empirical_rarity_v1: "Rarity",
+      change_point_v1: "Time-series change",
+      graph_behavior_v1: "Graph"
+    };
+
+    function detectorFindingEntries() {
+      const validationIds = new Set(["noop_v1","core_mirror_v1"]);
+      return (state.result?.module_results || [])
+        .filter(module => !validationIds.has(module.module))
+        .flatMap(module => (module.candidate_detections || []).map(candidate => ({module,candidate})));
+    }
+
+    function renderTopFeatures(reason) {
+      const features = reason.top_features || [];
+      if (!features.length) return `<div class="help">No per-feature breakdown was reported.</div>`;
+      return `<table class="flow-table"><thead><tr><th>Feature</th><th>Contribution details</th></tr></thead><tbody>${features.map(feature => {
+        const details = Object.entries(feature).filter(([key]) => key !== "feature").map(([key,value]) => `${key.replaceAll("_"," ")}: ${typeof value === "object" ? JSON.stringify(value) : fmt(value)}`).join(" · ");
+        return `<tr><td><code>${esc(String(feature.feature || "unknown").replaceAll("_"," "))}</code></td><td>${esc(details || "reported as a contributing feature")}</td></tr>`;
+      }).join("")}</tbody></table>`;
+    }
+
+    function renderDetectorFindings() {
+      const entries = detectorFindingEntries();
+      const modules = (state.result?.module_results || []).filter(module => detectorNames[module.module]);
+      const filters = [{id:"all",label:"All"}, ...modules.map(module => ({id:module.module,label:detectorNames[module.module]}))];
+      const countFor = id => id === "all" ? entries.length : entries.filter(entry => entry.module.module === id).length;
+      const filterBar = `<div class="method-filters">${filters.map(filter => `<button class="method-filter ${state.method === filter.id ? "active" : ""}" data-method="${esc(filter.id)}">${esc(filter.label)} <span class="count">${countFor(filter.id)}</span></button>`).join("")}</div>`;
+      const selected = state.method === "all" ? entries : entries.filter(entry => entry.module.module === state.method);
+      const introduction = `<div class="reason"><strong>How to read these findings</strong><p>Shadow findings are available for study but are not official anomalies. Active findings contribute to official output. “Core overlap” means the statistical detector selected the same IP and time window.</p></div>`;
+      const cards = selected.map(({module,candidate}) => {
+        const reasons = candidate.reasons || [];
+        const first = reasons[0] || {};
+        const protocols = (candidate.protocols || [first.protocol]).filter(Boolean);
+        const destination = protocols.includes("destination");
+        const graph = module.module === "graph_behavior_v1";
+        const stream = graph ? "Source-IP communication graph" : destination ? "Destination-IP window" : `Source-IP / ${protocols.join(", ") || "unknown protocol"}`;
+        const overlap = (module.comparison?.overlap_ids || []).includes(candidate.detection_id);
+        const active = module.mode === "active";
+        const start = Number(candidate.window_start || 0);
+        const end = start + analysisWindowSeconds();
+        const reasonDetails = reasons.map(reason => `<div class="reason"><div class="reason-title"><span>${esc(String(reason.feature || "method score").replaceAll("_"," "))}</span><span class="meta">raw score ${fmt(reason.score)} · threshold ${fmt(reason.threshold)}</span></div><p>${esc(reason.explanation || "")}</p>${renderTopFeatures(reason)}${reason.new_peer_ips?.length ? `<p><strong>New destinations:</strong> ${esc(reason.new_peer_ips.join(", "))}</p>` : ""}</div>`).join("");
+        const uids = candidate.responsible_uids || [];
+        const fuids = candidate.responsible_fuids || [];
+        return `<article class="card method">
+          <div class="card-head"><span class="badge">${esc(detectorNames[module.module] || module.label || module.module)}</span>
+            <div><div class="headline">${esc(candidate.host || "Unknown IP")} · ${esc(stream)}</div><div class="meta">window ${fmt(start)}–${fmt(end)} · ${reasons.length} reason${reasons.length === 1 ? "" : "s"}</div></div>
+            <div class="score"><div class="score-label">display score</div><div>${fmt(candidate.score)}</div></div></div>
+          <div class="card-body">
+            <div class="finding-summary">
+              <div class="finding-fact"><small>Mode</small><span class="mode-pill mode-${esc(module.mode)}">${esc(module.mode)}</span></div>
+              <div class="finding-fact"><small>Official effect</small><strong>${active ? "Yes — Active" : "No — Shadow"}</strong></div>
+              <div class="finding-fact"><small>Core overlap</small><strong>${overlap ? "Yes" : "No"}</strong></div>
+              <div class="finding-fact"><small>Detection ID</small><code>${esc(candidate.detection_id)}</code></div>
+            </div>
+            ${reasonDetails}
+            <div class="reason"><strong>Responsible identifiers</strong><p>UIDs: ${uids.length ? uids.map(uid => `<code>${esc(uid)}</code>`).join(" ") : "none reported"}<br>FUIDs: ${fuids.length ? fuids.map(fuid => `<code>${esc(fuid)}</code>`).join(" ") : "none reported"}</p></div>
+          </div></article>`;
+      }).join("");
+      $("results").innerHTML = `<section class="chart-panel"><div class="chart-head"><h2>Optional detector findings</h2><span>Explore each method independently</span></div>${filterBar}${introduction}${cards || `<div class="empty">This detector produced no findings in the current run.</div>`}</section>`;
+      document.querySelectorAll(".method-filter").forEach(button => button.addEventListener("click", () => { state.method = button.dataset.method; renderDetectorFindings(); }));
       document.querySelectorAll(".card-head").forEach(head => head.addEventListener("click", () => head.parentElement.classList.toggle("open")));
     }
 
