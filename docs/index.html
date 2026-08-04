@@ -755,6 +755,8 @@
         <div class="formula">overlap = core IDs ∩ module IDs<br>core only = core IDs − module IDs<br>module only = module IDs − core IDs<br>decision agreement = |overlap| / |core IDs ∪ module IDs|<br>score difference = mean(|core score − module score|) over overlapping IDs</div>
         <p>The core is a stable reference, not ground truth. A module-only result is a disagreement to investigate, not automatically a false positive; a core-only result is not automatically a module failure. The initial <code>core_mirror_v1</code> module copies the core output and should therefore produce 100% agreement and zero score difference. This known answer validates the comparison path before a different model is introduced.</p>
         <div class="callout good"><strong>Dashboard:</strong> change each real detector independently between Off, Shadow, and Active. Every change recomputes the run from the selected capture, which makes method comparisons reproducible.</div>
+        <h3>Exploring individual findings</h3>
+        <p>Open <strong>Detector findings</strong> in the dashboard and select All, Multivariate, PCA, Isolation Forest, Rarity, Time-series change, or Graph. Each expandable finding shows the IP, time window, source/protocol or destination-IP stream, raw method score, threshold, contributing features, responsible UIDs/FUIDs, core overlap, and whether its mode gave it an official effect. This view includes Shadow findings so they can be studied, but labels them as non-official.</p>
       </section>
 
       <section id="multivariate">
