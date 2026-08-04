@@ -124,6 +124,27 @@ SETTING_METADATA = {
         "Validation module that copies core host/window decisions. In Shadow "
         "mode, the comparison should show complete agreement and zero score difference.",
     ),
+    "experimental_multivariate_mode": (
+        "Multivariate model mode",
+        "Learns joint feature relationships. It is restricted to Off or Shadow "
+        "until its disagreements with the core have been evaluated.",
+    ),
+    "multivariate_minimum_points": (
+        "Multivariate baseline points",
+        "Prior windows required for each source-IP/protocol covariance model.",
+    ),
+    "multivariate_threshold": (
+        "Multivariate threshold",
+        "Minimum dimension-normalized robust Mahalanobis distance for a candidate.",
+    ),
+    "multivariate_shrinkage": (
+        "Covariance shrinkage",
+        "Suppresses unstable correlations; 0 keeps them fully and 1 uses only variances.",
+    ),
+    "multivariate_history_limit": (
+        "Multivariate history",
+        "Maximum recent windows retained per source-IP/protocol model.",
+    ),
 }
 
 
