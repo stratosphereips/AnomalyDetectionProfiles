@@ -379,6 +379,17 @@ def flow_identifier_fields(flows: list[dict[str, Any]]) -> dict[str, list[str]]:
     }
 
 
+def public_flow_records(
+    flows: list[dict[str, Any]], limit: int
+) -> list[dict[str, Any]]:
+    """Return bounded flow evidence without internal attribution flags."""
+
+    return [
+        {key: value for key, value in flow.items() if not key.startswith("_")}
+        for flow in flows[:limit]
+    ]
+
+
 def importance_metrics(
     reasons: list[dict[str, Any]],
     total_score: float,
@@ -1485,6 +1496,10 @@ class MultiProtocolDetector:
                 "external_baseline": self.force_training,
                 "uids": target_identifiers["responsible_uids"],
                 "fuids": target_identifiers["responsible_fuids"],
+                "responsible_flow_count": len(bucket.flow_records),
+                "responsible_flows": public_flow_records(
+                    bucket.flow_records, self.args.max_responsible_flows
+                ),
             }
         )
         if not self.suppress_output:
@@ -1875,6 +1890,10 @@ class MultiProtocolDetector:
                         if clean(flow.get("dst"))
                     }
                 ),
+                "responsible_flow_count": len(bucket.flow_records),
+                "responsible_flows": public_flow_records(
+                    bucket.flow_records, self.args.max_responsible_flows
+                ),
             }
         )
         if not self.suppress_output:
@@ -2158,6 +2177,12 @@ def merge_active_detections(
                 "score": float(candidate.get("score", 0.0)),
                 "protocols": list(candidate.get("protocols", ())),
                 "reasons": list(candidate.get("reasons", ())),
+                "responsible_flow_count": int(
+                    candidate.get("responsible_flow_count", 0)
+                ),
+                "responsible_flows": list(
+                    candidate.get("responsible_flows", ())
+                ),
             }
             if candidate_id in by_id:
                 event = by_id[candidate_id]
@@ -2190,8 +2215,12 @@ def merge_active_detections(
                 "shared_fuids": [],
                 "responsible_uids": sorted(set(candidate.get("responsible_uids", ()))),
                 "responsible_fuids": sorted(set(candidate.get("responsible_fuids", ()))),
-                "responsible_flow_count": 0,
-                "responsible_flows": [],
+                "responsible_flow_count": int(
+                    candidate.get("responsible_flow_count", 0)
+                ),
+                "responsible_flows": list(
+                    candidate.get("responsible_flows", ())
+                ),
                 "protocol_anomalies": [],
                 "target_anomalies": [],
                 "reasons": reasons,
@@ -2725,6 +2754,7 @@ def main(argv: Optional[list[str]] = None) -> int:
             target_anomalies=len(detector.target_anomalies),
             ssl_flow_alerts=len(detector.flow_anomalies),
             global_anomalies=len(core_global_events),
+            max_responsible_flows=args.max_responsible_flows,
             core_detections=tuple(
                 {
                     "detection_id": detection_id(event["host"], event["hour_start"]),
