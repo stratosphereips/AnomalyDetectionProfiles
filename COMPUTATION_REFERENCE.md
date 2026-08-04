@@ -198,7 +198,26 @@ selected folder. External observations count as prior model points but not as
 analyzed records. A model absent from external input starts with the configured
 training or cold-start behavior.
 
-For each transformed benign value \(y_n\), training uses Welford moments:
+### Why Welford is used
+
+Each feature model needs a center and a measure of variation. The mean provides
+the center; the sample variance records how widely trusted values normally
+move around that center. A later distance from the mean is meaningful only
+relative to that normal variation.
+
+Welford produces the ordinary sample mean and variance incrementally as each
+trusted window arrives. A two-pass calculation would collect the values and
+scan them again. The simple one-pass identity
+\(E[y^2]-E[y]^2\) can lose numerical precision because it subtracts two large,
+nearly equal quantities. Welford avoids that unstable subtraction and does not
+need to recompute the statistics from the full history after every window.
+
+Welford is a baseline estimator, not an anomaly decision. Its mean and
+variance support early z-score calculations; later robust scoring uses the
+stored median and MAD. Training values are also retained separately for
+empirical threshold calibration.
+
+For each transformed trusted value \(y_n\), Welford updates:
 
 $$
 n \leftarrow n + 1,
@@ -221,15 +240,32 @@ s_n^2 = \frac{M_{2,n}}{\max(1,n-1)}.
 $$
 
 `M2` accumulates squared deviations. Once two values exist, `n - 1` makes
-this the sample variance.
+this the sample variance. Trusted training values receive equal weight. After
+training, observations are not assumed benign, so the detector uses EWMA
+instead: ordinary changes update at `drift_alpha`, while strong anomalies use
+the much smaller `suspicious_alpha` to limit baseline contamination.
 
 ## 📏 Adaptive noise floor
 
-A zero variance would make harmless differences produce an unbounded
-z-score. Each model maintains a minimum standard deviation \(f\), initially
-`0.1` in transformed space.
+The noise floor is the smallest normal variation that a feature model allows
+in the denominator of its z-score. Each feature model stores its own floor
+\(f\), initially `0.1` in transformed space:
 
-Before a value updates the model, its absolute residual is:
+$$
+\text{variation used by z-score}
+= \max(\text{measured variation}, f).
+$$
+
+It is needed because identical historical values have zero measured
+variation, which would cause division by zero. Even a very small measured
+variation can turn a harmless difference into a huge z-score. The floor keeps
+the denominator above a realistic minimum. It is not an anomaly threshold and
+is not a minimum number of packets or bytes.
+
+The minimum adapts because different feature models can have different levels
+of recurring small prediction error. Before a value updates the model, its
+absolute residual is:
+
 
 $$
 r = |y-\mu|.
