@@ -128,11 +128,12 @@ average of the raw values.
 
 ## 🎓 Benign training
 
-`--training-hours N` defines one capture-wide assume-benign time interval. Let
-\(t_0\) be the timestamp of the first analyzed record:
+`--training-windows N` defines one capture-wide assume-benign interval. Let
+\(t_0\) be the timestamp of the first analyzed record and \(W\) be
+`window_seconds`:
 
 $$
-t_{\mathrm{end}} = t_0 + 3600N.
+t_{\mathrm{end}} = t_0 + NW.
 $$
 
 A selected-capture record is eligible for trusted training exactly when:
@@ -145,12 +146,14 @@ $$
   protocol, specialized SSL path, and destination IP.
 - The interval is based on elapsed capture time, not the number of observed
   windows for an individual model.
+- Selected-capture windows are anchored at \(t_0\), so the first \(N\)
+  consecutive intervals end exactly at \(t_{\mathrm{end}}\).
 - A model first appearing at or after \(t_{\mathrm{end}}\) receives no trusted
   training values.
 - Records inside the interval are aggregated into window feature values and
   fitted with Welford's method; no anomaly is emitted for them.
-- If a regular aggregation window crosses \(t_{\mathrm{end}}\), it is split at
-  that timestamp so records at or after the cutoff cannot enter training.
+- Detection begins with window \(N+1\), whose start is
+  \(t_{\mathrm{end}}\), so post-cutoff records cannot enter training.
 - Empty windows are not inserted as zero-valued observations.
 
 After the cutoff, a model with fewer than `minimum_points` prior values returns
@@ -159,9 +162,9 @@ Those observations are not trusted training values and do not enter empirical
 threshold calibration. Eligibility does not guarantee an anomaly; the z-score
 must still reach its effective threshold.
 
-### Zero training hours
+### Zero training windows
 
-`training_hours = 0` skips the explicit assume-benign branch. From the first
+`training_windows = 0` skips the explicit assume-benign branch. From the first
 window, output records use `phase = "detection"`, and `trained_windows` remains
 zero. This does not eliminate the need for a baseline. While model count is
 below `minimum_points`, `robust_zscore` returns zero, no statistical reason is
@@ -172,7 +175,7 @@ subsequent observations use `drift_alpha` while the anomaly score remains zero.
 Because the Welford training branch is never entered, `training_values` stays
 empty and empirical quantile calibration is not performed. Feature decisions
 therefore use the configured fallback threshold. For example, with
-`training_hours = 0` and `minimum_points = 8`, windows one through eight seed
+`training_windows = 0` and `minimum_points = 8`, windows one through eight seed
 the adaptive baseline with z-score zero, and window nine is the first eligible
 for a statistical anomaly.
 
@@ -775,7 +778,7 @@ enter an anomaly-score sum.
 
 ## ⚙️ Configuration value reference
 
-Command-line `--sensitivity` and `--training-hours` override `[common]`.
+Command-line `--sensitivity` and `--training-windows` override `[common]`.
 Explicit command-line options for other settings override their configured
 values.
 
@@ -788,7 +791,7 @@ run. The dashboard displays and snapshots those effective configured values.
 
 | Setting | Built-in fallback | Exact role |
 | ------- | ------: | ---------- |
-| `training_hours` | `3` | Length in elapsed hours of the one capture-wide trusted interval beginning at the first analyzed record; zero selects adaptive cold start |
+| `training_windows` | `3` | Number of `window_seconds` units in the one capture-wide trusted interval beginning at the first analyzed record; zero selects adaptive cold start |
 | `window_seconds` | `3600` | Width of every aggregation window; `300` selects five-minute windows |
 | `normal_dirs` | empty | Comma-separated known-normal Zeek folders fitted before the selected input |
 | `sensitivity` | `1.0` | Divisor applied to anomaly thresholds and global protocol-count gate |
@@ -886,7 +889,7 @@ absence relative to the baseline is itself the evidence.
 | `global_score` | Contributions plus corroboration, bounded to `[0,1]` |
 | `phase` | `training` when the window contains only selected-capture records before the global training cutoff; otherwise `detection` |
 | `trained_windows` | Number of this model's window values fitted from trusted training traffic |
-| `window_start` | Epoch timestamp at the start of the aggregation window; a window crossing the global training cutoff is split and the detection part starts exactly at the cutoff |
+| `window_start` | Timestamp at the start of the aggregation window; selected-capture windows are anchored at the first analyzed record |
 | `window_seconds` | Configured width of the aggregation window |
 | `hour_start` | Compatibility alias for `window_start`; retained for existing consumers |
 | `responsible_flow_count` | Total matching Zeek records before representative-flow truncation |
