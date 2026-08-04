@@ -266,7 +266,7 @@
     function renderControls() {
       const root = $("controls"); root.innerHTML = "";
       const groups = [
-        ["Core model", ["window_seconds","training_hours","sensitivity","minimum_points","threshold","threshold_quantile"]],
+        ["Core model", ["window_seconds","training_windows","sensitivity","minimum_points","threshold","threshold_quantile"]],
         ["External baseline", ["normal_dirs"]],
         ["Input filtering", ["ignore_multicast_broadcast"]],
         ["Adaptation", ["drift_alpha","suspicious_alpha","adaptation_score"]],
@@ -284,8 +284,8 @@
           const meta = state.metadata[key] || {label:key,help:""};
           const value = all[key];
           const control = document.createElement("div"); control.className = "control";
-          const reference = key === "training_hours" ? `<div id="captureReference" class="reference reference-block"></div>` : "";
-          const minimum = key === "training_hours" ? 0 : ["multivariate_minimum_points","multivariate_history_limit"].includes(key) ? 3 : ["window_seconds","minimum_points"].includes(key) ? 1 : null;
+          const reference = key === "training_windows" ? `<div id="captureReference" class="reference reference-block"></div>` : "";
+          const minimum = key === "training_windows" ? 0 : ["multivariate_minimum_points","multivariate_history_limit"].includes(key) ? 3 : ["window_seconds","minimum_points"].includes(key) ? 1 : null;
           const allowedModes = ["off","shadow"];
           const field = key.startsWith("experimental_") && key.endsWith("_mode")
             ? `<select id="cfg-${key}" data-key="${key}">${allowedModes.map(mode => `<option value="${mode}" ${value === mode ? "selected" : ""}>${mode[0].toUpperCase()+mode.slice(1)}</option>`).join("")}</select>`
@@ -321,6 +321,7 @@
         clearTimeout(state.inspectTimer);
         state.inspectTimer = setTimeout(inspectFolder, 250);
       }
+      if (key === "window_seconds" || key === "training_windows") updateCaptureReference();
       if ($("autoRun").checked) {
         clearTimeout(state.timer);
         state.timer = setTimeout(runAnalysis, 700);
@@ -697,11 +698,12 @@
       const totalHours = Number(state.capture.duration_hours || 0);
       const totalSeconds = Number(state.capture.duration_seconds || 0);
       const windowSeconds = Number(state.capture.window_seconds || analysisWindowSeconds());
-      const trainingHours = Number(state.config?.common?.training_hours || 0);
+      const trainingWindows = Number(state.config?.common?.training_windows || 0);
       const trainingStart = Number(state.capture.first_ts || 0);
-      const trainingEnd = trainingStart + trainingHours * 3600;
-      target.textContent = `· one global interval: first ${trainingHours.toLocaleString()} h · ${trainingStart} ≤ timestamp < ${trainingEnd}`;
-      target.title = `${totalHours.toFixed(1)} h capture; ${state.capture.records} timestamped records; training is based on elapsed capture time, not on when each protocol first appears (${Math.round(totalSeconds).toLocaleString()} s capture duration; ${windowSeconds.toLocaleString()}-s aggregation windows)`;
+      const trainingDuration = trainingWindows * windowSeconds;
+      const trainingEnd = trainingStart + trainingDuration;
+      target.textContent = `· ${trainingWindows.toLocaleString()} windows × ${windowSeconds.toLocaleString()} s = ${trainingDuration.toLocaleString()} s · ${trainingStart} ≤ timestamp < ${trainingEnd}`;
+      target.title = `${totalHours.toFixed(1)} h capture; ${state.capture.records} timestamped records; one global ${trainingWindows}-window training interval, not a separate interval for each protocol (${Math.round(totalSeconds).toLocaleString()} s capture duration)`;
     }
 
     async function saveConfig() {
