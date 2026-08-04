@@ -204,8 +204,8 @@
       <div id="errorBox" class="errorbox"></div>
       <section id="summary" class="summary"></section>
       <section class="mode-guide" aria-label="Pipeline mode definitions">
-        <div><strong>ACTIVE CORE</strong><br>Makes the official anomaly decisions.</div>
-        <div><strong>SHADOW EXPERIMENT</strong><br>Runs and shows candidates, but cannot change official anomalies.</div>
+        <div><strong>ACTIVE</strong><br>The core always detects; active optional methods may add anomalies but never remove core anomalies.</div>
+        <div><strong>SHADOW</strong><br>Runs and shows candidates, but cannot change official anomalies.</div>
         <div><strong>OFF</strong><br>Does not run. No candidates and no effect.</div>
       </section>
       <section id="pipelineStatus" class="pipeline-status"></section>
@@ -272,7 +272,13 @@
         ["Adaptation", ["drift_alpha","suspicious_alpha","adaptation_score"]],
         ["Global ensemble", ["protocol_score_cap","global_threshold","minimum_protocols","corroboration_bonus","corroboration_bonus_cap","uid_corroboration_bonus","uid_corroboration_bonus_cap"]],
         ["Specialized SSL", ["ssl_hourly_threshold","ssl_flow_threshold","ssl_novelty_threshold","ssl_baseline_alpha","ssl_max_small_anomalies"]],
-        ["Experimental pipeline", ["experimental_noop_mode","experimental_mirror_mode","experimental_multivariate_mode","multivariate_minimum_points","multivariate_threshold","multivariate_shrinkage","multivariate_history_limit"]],
+        ["Pipeline validation", ["experimental_noop_mode","experimental_mirror_mode"]],
+        ["Multivariate detector", ["experimental_multivariate_mode","multivariate_minimum_points","multivariate_threshold","multivariate_shrinkage","multivariate_history_limit"]],
+        ["PCA reconstruction detector", ["experimental_pca_mode","pca_minimum_points","pca_threshold","pca_components","pca_history_limit"]],
+        ["Isolation Forest detector", ["experimental_isolation_mode","isolation_minimum_points","isolation_threshold","isolation_trees","isolation_history_limit"]],
+        ["Rarity and novelty detector", ["experimental_rarity_mode","rarity_minimum_points","rarity_threshold","rarity_history_limit"]],
+        ["Time-series change detector", ["experimental_change_mode","change_minimum_points","change_threshold","change_recent_windows","change_history_limit"]],
+        ["Communication graph detector", ["experimental_graph_mode","graph_minimum_points","graph_threshold","graph_history_limit"]],
         ["Attribution", ["max_responsible_flows"]]
       ];
       const all = {...state.config.common, ...state.config.multi_protocol};
@@ -285,8 +291,9 @@
           const value = all[key];
           const control = document.createElement("div"); control.className = "control";
           const reference = key === "training_windows" ? `<div id="captureReference" class="reference reference-block"></div>` : "";
-          const minimum = key === "training_windows" ? 0 : ["multivariate_minimum_points","multivariate_history_limit"].includes(key) ? 3 : ["window_seconds","minimum_points"].includes(key) ? 1 : null;
-          const allowedModes = ["off","shadow"];
+          const minimum = key === "training_windows" ? 0 : (key.includes("minimum_points") || key.includes("history_limit")) ? 3 : ["window_seconds","minimum_points"].includes(key) ? 1 : null;
+          const validationMode = ["experimental_noop_mode","experimental_mirror_mode"].includes(key);
+          const allowedModes = validationMode ? ["off","shadow"] : ["off","shadow","active"];
           const field = key.startsWith("experimental_") && key.endsWith("_mode")
             ? `<select id="cfg-${key}" data-key="${key}">${allowedModes.map(mode => `<option value="${mode}" ${value === mode ? "selected" : ""}>${mode[0].toUpperCase()+mode.slice(1)}</option>`).join("")}</select>`
             : typeof value === "boolean"
@@ -389,11 +396,18 @@
       const configuredMode = state.config?.multi_protocol?.experimental_noop_mode || "off";
       const core = pipeline?.core || {label:"Adaptive statistical detector",mode:"active",status:"ready",locked:true,affects_detection:true};
       const configuredMirror = state.config?.multi_protocol?.experimental_mirror_mode || "shadow";
-      const configuredMultivariate = state.config?.multi_protocol?.experimental_multivariate_mode || "shadow";
+      const configured = key => state.config?.multi_protocol?.[key] || "shadow";
       const experiments = pipeline?.experimental || [
         {label:"No-op pipeline check",mode:configuredMode,status:configuredMode === "off" ? "disabled" : "not run",contribution:0,affects_detection:false},
         {label:"Core mirror comparison check",mode:configuredMirror,status:configuredMirror === "off" ? "disabled" : "not run",contribution:0,affects_detection:false},
-        {label:"Robust multivariate feature relationships",mode:configuredMultivariate,status:configuredMultivariate === "off" ? "disabled" : "not run",contribution:0,affects_detection:false}
+        ...[
+          ["Robust multivariate feature relationships","experimental_multivariate_mode"],
+          ["PCA reconstruction error","experimental_pca_mode"],
+          ["Isolation Forest","experimental_isolation_mode"],
+          ["Empirical rarity and novelty","experimental_rarity_mode"],
+          ["Rolling time-series change","experimental_change_mode"],
+          ["Communication graph behavior","experimental_graph_mode"]
+        ].map(([label,key]) => ({label,mode:configured(key),status:configured(key) === "off" ? "disabled" : "not run",contribution:0,affects_detection:false}))
       ];
       const cards = [core, ...experiments].map(module => {
         const failed = module.status === "error";
@@ -401,7 +415,7 @@
         const role = module.locked ? "Locked core · always makes the current decisions" :
           module.mode === "shadow" && module.status === "ready" && module.eligible === false ? "Ran safely · insufficient eligible history for scoring · cannot change detection" :
           module.mode === "shadow" ? `Computed for comparison · ${module.candidate_detections?.length || 0} candidates · cannot change detection` :
-          module.mode === "active" ? `Active contribution: ${fmt(module.contribution || 0)}` : "Not executed · no detection effect";
+          module.mode === "active" ? `May add official anomalies · ${module.candidate_detections?.length || 0} candidates · never removes core anomalies` : "Not executed · no detection effect";
         const error = failed && module.error ? ` · ${module.error}` : "";
         return `<div class="pipeline-module"><strong>${esc(module.label || module.module)}</strong><span class="mode-pill mode-${esc(modeClass)}">${esc(failed ? "error" : module.mode)}</span>
           <div class="module-detail">${esc(role + error)}</div></div>`;
@@ -472,18 +486,19 @@
       const details = detectorModules.map(module => {
         const c = module.comparison || {};
         return `<div class="reason"><strong>${esc(module.label || module.module)} comparison details</strong>
-          <p>Detected by the official core only: ${esc((c.core_only_ids || []).join(", ") || "none")}<br>Suggested by this Shadow module only: ${esc((c.module_only_ids || []).join(", ") || "none")}<br>Detected by both: ${esc((c.overlap_ids || []).join(", ") || "none")}</p></div>`;
+          <p>Detected by the statistical core only: ${esc((c.core_only_ids || []).join(", ") || "none")}<br>Selected by this module only: ${esc((c.module_only_ids || []).join(", ") || "none")}<br>Detected by both: ${esc((c.overlap_ids || []).join(", ") || "none")}</p></div>`;
       }).join("");
       const candidates = detectorModules.flatMap(module => (module.candidate_detections || []).map(candidate => ({module:module.label || module.module,mode:module.mode,...candidate})));
       const prettyFeature = value => String(value || "").replaceAll("_", " ");
       const candidateRows = candidates.map(candidate => {
         const reason = (candidate.reasons || [])[0] || {};
         const contributors = (reason.top_features || []).map(feature => prettyFeature(feature.feature)).join(", ") || "not available";
-        return `<tr><td>${esc(candidate.host || "unknown")}</td><td>${fmt(candidate.window_start)}</td><td>${esc((candidate.protocols || [reason.protocol]).filter(Boolean).join(", ") || "unknown")}</td><td><strong>${fmt(reason.score)}</strong></td><td>${fmt(reason.threshold)}</td><td>${fmt(candidate.score)}<br><span class="meta">display only—not probability</span></td><td>${esc(contributors)}</td><td><span class="mode-pill mode-shadow">SHADOW · no official effect</span></td></tr>`;
+        const active = candidate.mode === "active";
+        return `<tr><td>${esc(candidate.module)}</td><td>${esc(candidate.host || "unknown")}</td><td>${fmt(candidate.window_start)}</td><td>${esc((candidate.protocols || [reason.protocol]).filter(Boolean).join(", ") || "unknown")}</td><td><strong>${fmt(reason.score)}</strong></td><td>${fmt(reason.threshold)}</td><td>${fmt(candidate.score)}<br><span class="meta">bounded display score</span></td><td>${esc(contributors)}</td><td><span class="mode-pill mode-${active ? "active" : "shadow"}">${active ? "ACTIVE · adds if module-only" : "SHADOW · comparison only"}</span></td></tr>`;
       }).join("");
-      const candidateTable = candidateRows ? `<h3>Experimental detector candidates</h3><div class="reason"><strong>These are not official anomalies.</strong><p>The Shadow detector found unusual behavior for comparison. Raw joint distance is compared with the threshold. Normalized display score is only a 0–1 visualization and is not probability or confidence.</p></div><table class="flow-table"><thead><tr><th>Source IP</th><th>Window start</th><th>Protocol</th><th>Raw joint distance</th><th>Threshold</th><th>Normalized display score</th><th>Strongest contributing features</th><th>Effect</th></tr></thead><tbody>${candidateRows}</tbody></table>` : `<div class="help" style="margin-top:12px">The experimental detector produced no Shadow candidates in this run.</div>`;
+      const candidateTable = candidateRows ? `<h3>Detector candidates</h3><div class="reason"><strong>Mode determines their effect.</strong><p>Shadow candidates are comparison results only. Active candidates become official anomalies when the core did not already report that IP and window; they annotate an existing core anomaly when both agree.</p></div><table class="flow-table"><thead><tr><th>Detector</th><th>IP</th><th>Window start</th><th>Stream</th><th>Raw method score</th><th>Threshold</th><th>Display score</th><th>Strongest features</th><th>Effect</th></tr></thead><tbody>${candidateRows}</tbody></table>` : `<div class="help" style="margin-top:12px">No detector candidates were produced in this run.</div>`;
       $("results").innerHTML = `<section class="chart-panel"><div class="chart-head"><h2>Same-run decision comparison</h2><span>Core is a reference, not ground truth</span></div>
-        <div class="reason"><strong>How to read this page</strong><p>The official Active core produces real anomalies. A Shadow detector runs beside it and suggests candidates, but contributes exactly zero to official decisions. “Both” means they selected the same source IP and window.</p></div>
+        <div class="reason"><strong>How to read this page</strong><p>Off does not run. Shadow runs for comparison and cannot change official anomalies. Active may add its own candidates, but it can never remove or weaken a statistical-core anomaly. “Both” means the two methods selected the same IP and window.</p></div>
         ${comparisonTable("Experimental detector comparison", detectorModules, "Differences are cases to investigate; the core is a reference, not known truth.")}${details}
         ${comparisonTable("Pipeline validation checks — not detectors", validationModules, "The no-op and mirror only test the software plumbing. Ignore them when evaluating anomaly detection.")}${candidateTable}</section>`;
     }
@@ -503,6 +518,9 @@
         ),
         ...(row.target_anomalies || []).flatMap(x =>
           x.reasons.map(reason=>({...reason, source_protocol:"target", target_ip:x.target}))
+        ),
+        ...(row.experimental_detections || []).flatMap(x =>
+          (x.reasons || []).map(reason=>({...reason, source_protocol:x.label || x.module}))
         )
       ];
       const flows = row.responsible_flows || [];
@@ -533,9 +551,12 @@
         : reason.target_ip
         ? ` · target ${reason.target_ip} · window ${start}–${Number(start)+Number(reason.window_seconds||analysisWindowSeconds())-1}`
         : "";
+      const measurement = reason.zscore != null
+        ? `value ${fmt(reason.value)} · baseline ${fmt(reason.mean)} · z ${fmt(reason.zscore)} · threshold ${fmt(reason.threshold)}`
+        : `method score ${fmt(reason.score)} · threshold ${fmt(reason.threshold)}`;
       return `<div class="reason"><div class="reason-title"><span>${esc(scopedFeature)}</span>
         <span class="${esc(direction)}">${esc(direction)}</span>
-        <span class="meta">value ${fmt(reason.value)} · baseline ${fmt(reason.mean)} · z ${fmt(reason.zscore)} · threshold ${fmt(reason.threshold)}${esc(scope)}</span></div>
+        <span class="meta">${esc(measurement)}${esc(scope)}</span></div>
         <p>${esc(reason.explanation || "")}</p></div>`;
     }
 
