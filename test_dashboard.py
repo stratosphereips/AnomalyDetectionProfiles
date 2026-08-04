@@ -70,7 +70,7 @@ class DashboardTests(unittest.TestCase):
         self.assertIn("Composite importance", html)
         self.assertIn("All target IPs", html)
         self.assertIn("Save conf", html)
-        self.assertIn('["window_seconds","training_hours"', html)
+        self.assertIn('["window_seconds","training_windows"', html)
         self.assertIn('key === "window_seconds"', html)
         self.assertIn("setTimeout(runAnalysis, 700)", html)
         self.assertIn("Experimental pipeline", html)
@@ -190,7 +190,7 @@ class DashboardTests(unittest.TestCase):
                 ["1", "C1", "10.0.0.1", "50000", "1.1.1.1", "443", "new.test", "", "abc"],
             )
             config = dashboard.read_config(dashboard.DEFAULT_CONFIG)
-            config["common"]["training_hours"] = 0
+            config["common"]["training_windows"] = 0
             config["common"]["window_seconds"] = 300
             config["common"]["sensitivity"] = 1.0
             with patch.object(dashboard, "RUNS_DIR", root / "runs"):
@@ -247,7 +247,7 @@ class DashboardTests(unittest.TestCase):
                 ["1", "D1", "10.0.0.1", "1.1.1.1", "example.test", "A"],
             )
             config = dashboard.read_config(dashboard.DEFAULT_CONFIG)
-            config["common"]["training_hours"] = 0
+            config["common"]["training_windows"] = 0
             with patch.object(dashboard, "RUNS_DIR", root / "runs"):
                 result = dashboard.run_detector(
                     {"zeek_dir": str(zeek), "config": config}
@@ -306,7 +306,7 @@ class DashboardTests(unittest.TestCase):
                 path,
                 {
                     "common": {
-                        "training_hours": 9,
+                        "training_windows": 9,
                         "window_seconds": 300,
                         "normal_dirs": "/captures/normal",
                         "ignore_multicast_broadcast": False,
@@ -318,7 +318,7 @@ class DashboardTests(unittest.TestCase):
                 },
             )
             text = path.read_text(encoding="utf-8")
-            self.assertIn("training_hours = 9", text)
+            self.assertIn("training_windows = 9", text)
             self.assertIn("window_seconds = 300", text)
             self.assertIn("normal_dirs = /captures/normal", text)
             self.assertIn("ignore_multicast_broadcast = false", text)
@@ -329,11 +329,11 @@ class DashboardTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             saved = Path(temp) / "saved.conf"
             saved.write_text(
-                "[common]\ntraining_hours = 9\n", encoding="utf-8"
+                "[common]\ntraining_windows = 9\n", encoding="utf-8"
             )
             with patch.object(dashboard, "SAVED_CONFIG", saved):
                 config = dashboard.dashboard_config()
-            self.assertEqual(config["common"]["training_hours"], 9)
+            self.assertEqual(config["common"]["training_windows"], 9)
             self.assertEqual(
                 config["multi_protocol"]["experimental_mirror_mode"],
                 "shadow",
