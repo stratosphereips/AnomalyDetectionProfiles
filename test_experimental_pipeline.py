@@ -7,6 +7,7 @@ from experimental_pipeline import (
     ModuleEvidence,
     NoOpModule,
     PipelineContext,
+    RobustMultivariateModule,
 )
 
 
@@ -91,6 +92,50 @@ class ExperimentalPipelineTests(unittest.TestCase):
         self.assertEqual(
             result.comparison["mean_absolute_score_difference"], 0.0
         )
+
+    def test_multivariate_detects_unusual_relationship_with_normal_margins(self):
+        rows = tuple(
+            {
+                "host": "10.0.0.8",
+                "protocol": "dns",
+                "window_start": index * 300,
+                "phase": "training" if index < 10 else "detection",
+                "features": {
+                    "queries": index + 1 if index < 10 else 4,
+                    "responses": index + 1 if index < 10 else 8,
+                },
+                "uids": [f"D{index}"],
+                "fuids": [],
+            }
+            for index in range(11)
+        )
+        run_context = PipelineContext(
+            records_processed=11,
+            window_seconds=300,
+            protocols=("dns",),
+            protocol_anomalies=0,
+            target_anomalies=0,
+            ssl_flow_alerts=0,
+            global_anomalies=0,
+            protocol_windows=rows,
+        )
+        module = RobustMultivariateModule(
+            minimum_points=8,
+            threshold=1.2,
+            shrinkage=0.1,
+            history_limit=64,
+        )
+        result = ExperimentalPipeline([(module, "shadow")]).run(run_context)[0]
+        self.assertTrue(result.eligible)
+        self.assertEqual(len(result.candidate_detections), 1)
+        candidate = result.candidate_detections[0]
+        self.assertEqual(candidate["detection_id"], "10.0.0.8@3000")
+        deviations = candidate["reasons"][0]["top_features"]
+        self.assertTrue(
+            all(abs(item["standardized_deviation"]) < 1 for item in deviations)
+        )
+        self.assertEqual(result.contribution, 0)
+        self.assertFalse(result.affects_detection)
 
 
 if __name__ == "__main__":
