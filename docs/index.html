@@ -227,8 +227,8 @@
       <a href="#attribution">10. Explaining alerts</a>
       <a href="#walkthrough">11. Full example</a>
       <a href="#settings">12. Important settings</a>
-      <a href="#experimental">Experimental pipeline modes</a>
-      <a href="#multivariate">Experimental multivariate detector</a>
+      <a href="#experimental">Optional detector modes</a>
+      <a href="#multivariate">Additional detection methods</a>
     </nav>
 
     <main>
@@ -741,70 +741,58 @@
       </section>
 
       <section id="experimental">
-        <h2>Safe experimental modules</h2>
-        <div class="callout"><strong>The complete locked-core explanation ends above.</strong> Everything from this point onward describes optional experimental machinery. It is not part of the statistical method that creates the official anomalies shown in sections 1–12.</div>
-        <p>The adaptive statistical detector shown throughout this page is the <strong>locked core</strong>. Experimental detectors are placed after the core has completed its feature scoring, anomaly decisions, and adaptation. This preserves a known-good result while a new technique is evaluated.</p>
+        <h2>Optional detectors and operating modes</h2>
+        <p>The adaptive statistical detector explained above is always the <strong>core detector</strong>. The following independent detectors run after it. They read the same converted window features, but they never modify the core model or its decisions.</p>
         <div class="grid-3">
           <div class="card"><h3>Off</h3><p>The module is not executed. Its score and contribution are zero.</p></div>
-          <div class="card"><h3>Shadow = safe dry run</h3><p>The module executes and shows what it would select, but its contribution is forced to zero. It cannot add, remove, or modify an official anomaly.</p></div>
-          <div class="card"><h3>Active = trusted decision maker</h3><p>An Active detector is allowed to affect official anomaly decisions. Only the locked statistical core is Active today. Experimental modules do not currently offer Active mode.</p></div>
+          <div class="card"><h3>Shadow</h3><p>The detector runs and displays candidates for comparison. Its candidates are not official anomalies.</p></div>
+          <div class="card"><h3>Active</h3><p>The detector may add a module-only candidate to official anomalies. It can never remove, lower, or replace a core anomaly.</p></div>
         </div>
-        <div class="formula">module result = { status, eligible, score, candidate_contribution, contribution, reasons, top_features, responsible_uids, responsible_fuids }<br>Off or Shadow → contribution = 0<br>Active and eligible → contribution = candidate_contribution</div>
-        <p>The initial <code>noop_v1</code> module validates this control path. It deliberately returns score 0 and candidate contribution 0, including in Active mode. It is not another anomaly technique yet. If any experimental module raises an error, the pipeline reports that module as failed with contribution 0 and the core result remains available.</p>
+        <div class="formula">official anomalies = core anomalies ∪ candidates from Active optional detectors<br>Therefore: every core anomaly remains official in every mode.</div>
+        <p>If an Active detector and the core select the same <code>IP@window-start</code>, the optional finding is attached as extra evidence. If only the Active detector selects it, a new official anomaly is added. A module error is isolated: that module reports an error and the core result remains available.</p>
         <h3>Same-run comparison</h3>
         <p>Final global decisions are identified as <code>IP@window-start</code>. The IP may have entered the group through a source-IP/protocol/window anomaly, a destination-IP/window anomaly, or both. The Pipeline comparison tab compares the core set with a module's candidate set:</p>
         <div class="formula">overlap = core IDs ∩ module IDs<br>core only = core IDs − module IDs<br>module only = module IDs − core IDs<br>decision agreement = |overlap| / |core IDs ∪ module IDs|<br>score difference = mean(|core score − module score|) over overlapping IDs</div>
         <p>The core is a stable reference, not ground truth. A module-only result is a disagreement to investigate, not automatically a false positive; a core-only result is not automatically a module failure. The initial <code>core_mirror_v1</code> module copies the core output and should therefore produce 100% agreement and zero score difference. This known answer validates the comparison path before a different model is introduced.</p>
-        <div class="callout good"><strong>How to read the dashboard:</strong> the core card is always Active and Locked, so it creates the official anomalies. A Shadow card means “calculated for comparison, zero official effect.” Changing a mode with Auto-run enabled starts a fresh run after 700 ms; otherwise press Run analysis.</div>
+        <div class="callout good"><strong>Dashboard:</strong> change each real detector independently between Off, Shadow, and Active. Every change recomputes the run from the selected capture, which makes method comparisons reproducible.</div>
       </section>
 
       <section id="multivariate">
-        <h2>Experimental multivariate feature-relationship detector</h2>
-        <p>The core asks whether each current feature value is unusual separately. The multivariate model asks whether the <strong>combination</strong> and relationship among all current feature values is unusual. It receives the ordered list of numeric values calculated for one <code>(source IP, protocol, time window)</code>. In the mathematics below, an ordered list of numbers is called a <strong>vector</strong>. Version 1 does not receive destination-IP window feature values or individual TLS flow alerts.</p>
-        <h3>Plain-language process</h3>
-        <div class="pipeline">
-          <div class="step"><span class="step-num">1</span><h3>Receive a converted row</h3><p>The source-IP/protocol window has already converted its Zeek records into an ordered list of numeric feature values. In the equation below, that ordered list is called a vector.</p></div>
-          <div class="step"><span class="step-num">2</span><h3>Learn relationships</h3><p>Earlier vectors teach which features normally rise, fall, or remain stable together.</p></div>
-          <div class="step"><span class="step-num">3</span><h3>Measure the new vector</h3><p>The model calculates one raw joint distance from the learned feature pattern.</p></div>
-          <div class="step"><span class="step-num">4</span><h3>Suggest only</h3><p>If distance reaches the threshold, a Shadow candidate appears. Official anomalies remain unchanged.</p></div>
-        </div>
-        <div class="callout good"><strong>Example:</strong> a DNS window's query count and response count can each fall inside their ordinary ranges. If those two values normally rise and fall together, an ordinary query count combined with an ordinary but mismatched response count can still be a new joint pattern. Covariance represents that learned relationship.</div>
+        <h2>Additional detection methods</h2>
+        <p>These methods are explained after the core statistical method because they are optional alternatives. Except for the graph detector, they run independently on each source-IP/protocol stream and on each destination-IP stream. A source stream uses its protocol-specific converted features; a destination stream uses destination features such as source count, protocol count, connection count, bytes, ports, and failures.</p>
 
-        <h3>Reading one dashboard candidate</h3>
-        <div class="table-wrap"><table>
-          <thead><tr><th>Displayed value</th><th>Meaning</th></tr></thead>
-          <tbody>
-            <tr><td>Source IP and window start</td><td>The source and exact time window whose complete feature combination was evaluated.</td></tr>
-            <tr><td>Protocol</td><td>The independent per-protocol model, such as <code>conn</code> or <code>dns</code>.</td></tr>
-            <tr><td>Raw joint distance</td><td>The actual multivariate score used in the threshold comparison.</td></tr>
-            <tr><td>Threshold</td><td>The required raw distance. A candidate exists only when distance is at least this value.</td></tr>
-            <tr><td>Normalized display score</td><td>A bounded 0–1 visualization. It is <strong>not probability, confidence, severity, or maliciousness</strong>.</td></tr>
-            <tr><td>Strongest contributing features</td><td>The feature dimensions that contributed most to joint distance. They need not be individually anomalous.</td></tr>
-            <tr><td>Shadow · no official effect</td><td>The candidate is available for investigation but did not change any official anomaly.</td></tr>
-          </tbody>
-        </table></div>
-
-        <h3>Exact calculation</h3>
-        <p>One model is maintained for each <code>(source IP, protocol)</code>. Suppose its current window contains <code>p</code> numeric features.</p>
+        <h3>Robust multivariate relationships</h3>
+        <p>This detector asks whether the <strong>combination</strong> of current values is unusual. Example: DNS query count and response count may each be ordinary alone, but their combination can be strange if they normally rise together and suddenly disagree.</p>
         <div class="formula">1. Transform each feature j:<br>yⱼ = ln(1 + max(0, xⱼ))<br><br>2. Robustly standardize it from historical windows:<br>mⱼ = median(yⱼ history)<br>sⱼ = max(0.05, 1.4826 × median(|yⱼ − mⱼ|))<br>uⱼ = (yⱼ − mⱼ) / sⱼ<br><br>3. Learn covariance C from the historical standardized vectors.<br><br>4. Regularize unstable correlations with shrinkage λ:<br>C*ⱼₖ = (1 − λ) × Cⱼₖ, when j ≠ k<br>C*ⱼⱼ = max(Cⱼⱼ, 0.05) + 0.05<br><br>5. Measure joint distance from the historical standardized mean ū:<br>δ = u_current − ū<br>D² = δᵀ (C*)⁻¹ δ<br>multivariate_score = √(D² / p)<br><br>6. Candidate decision:<br>multivariate_score ≥ multivariate_threshold</div>
-        <p>Dividing by the number of features before taking the square root makes scores more comparable across protocols with different vector sizes. Covariance shrinkage reduces unreliable off-diagonal relationships when only a small baseline is available. A shrinkage of 1 removes all correlations and leaves a variance-only model; lower values retain more learned relationships.</p>
+        <p>The score is a distance, not a probability. Covariance describes which features normally move together. Shrinkage weakens unreliable learned relationships when history is short.</p>
 
-        <h3>Baseline, adaptation, and short captures</h3>
-        <div class="table-wrap"><table>
-          <thead><tr><th>Condition</th><th>Behavior</th></tr></thead>
-          <tbody>
-            <tr><td>External known-normal window</td><td>Always enters the multivariate history and cannot emit a candidate.</td></tr>
-            <tr><td>Core training-phase window</td><td>Enters history and cannot emit a multivariate candidate.</td></tr>
-            <tr><td>Fewer than <code>multivariate_minimum_points</code></td><td>The window seeds the covariance baseline. No joint distance is trusted yet.</td></tr>
-            <tr><td>Enough history</td><td>The current vector is scored against history <em>before</em> it is learned.</td></tr>
-            <tr><td>After scoring</td><td>The vector enters the rolling history. Only the most recent <code>multivariate_history_limit</code> windows are retained, so persistent behavior eventually replaces old behavior.</td></tr>
-          </tbody>
-        </table></div>
-        <p>With the defaults, the ninth observed window is the earliest possible multivariate comparison when there is no explicit training or external baseline. A one-hour capture therefore needs windows shorter than about seven minutes to provide nine continuously active windows for the same IP/protocol stream; five-minute windows provide at most twelve.</p>
+        <h3>PCA reconstruction</h3>
+        <p>PCA learns the dominant ways in which the historical feature values change together. It projects the current window onto those learned patterns and rebuilds it. The part that cannot be rebuilt is the reconstruction residual.</p>
+        <div class="formula">standardized current vector = u<br>reconstructed vector = projection of u onto the retained PCA components<br>PCA error = √(Σ(uⱼ − reconstructedⱼ)² / number_of_features)<br>candidate when PCA error ≥ pca_threshold</div>
+        <p>This adds detection of a new relationship pattern even when no single value is extremely large. The dashboard reports the features with the largest reconstruction residuals.</p>
 
-        <h3>Explanation and safety</h3>
-        <p>For a candidate, the module reports the protocols involved, responsible UIDs/FUIDs, and the five largest feature-distance contributions. A feature contribution is ranked by <code>|δⱼ × ((C*)⁻¹δ)ⱼ|</code>. This is an explanation of which dimensions drove joint distance; it is not a separate univariate threshold test.</p>
-        <div class="callout warn"><strong>Shadow-only evaluation:</strong> the dashboard intentionally offers only Off and Shadow for this model. Its candidate contribution is zero, it cannot create or modify a global anomaly, and every run rebuilds it from the selected capture and optional normal folders. Pipeline comparison shows where it agrees and disagrees with the locked core.</div>
+        <h3>Isolation Forest</h3>
+        <p>Each tree repeatedly chooses a feature and a random split. A window far from historical windows is separated in fewer splits. Many random trees are averaged so one lucky split does not decide the result.</p>
+        <div class="formula">mean_path = average number of splits needed to isolate the current window<br>isolation_score = 2^(−mean_path / expected_path_for_history_size)<br>candidate when isolation_score ≥ isolation_threshold</div>
+        <p>A score nearer 1 means easier to isolate and therefore more unusual. This method can find irregular regions that do not have an elliptical statistical shape.</p>
+
+        <h3>Empirical rarity and novelty</h3>
+        <p>For each feature, this detector counts how few historical values are at least as extreme as the current value. It does not assume a normal distribution.</p>
+        <div class="formula">tail_probability = min(1, 2 × (1 + smaller_tail_count) / (history_count + 1))<br>rarity_score = −log₁₀(tail_probability)<br>window score = largest feature rarity score<br>candidate when window score ≥ rarity_threshold</div>
+        <p>For example, score 1 means an estimated tail probability of 0.1; score 2 means 0.01. The added 1 prevents a false probability of zero with finite history.</p>
+
+        <h3>Time-series level change</h3>
+        <p>A point detector asks whether one window is unusual. This detector asks whether several recent windows have moved together to a new level. For every feature it compares the median of the recent windows with the median of the earlier reference windows.</p>
+        <div class="formula">scale = max(0.05, 1.4826 × median(|earlier value − earlier median|))<br>change_score = |recent median − earlier median| / scale<br>window score = largest feature change score<br>candidate when window score ≥ change_threshold</div>
+        <p>Using several recent windows makes a persistent change more important than a one-window spike.</p>
+
+        <h3>Communication graph behavior</h3>
+        <p>For each source IP and time window, all protocols are combined into one set of contacted destination IPs. Earlier sets form the source's communication graph history.</p>
+        <div class="formula">new_destination_ratio = new destinations / max(1, current destinations)<br>fanout_change = max(0, (current destination count − historical median) / historical robust scale)<br>graph_score = 0.6 × new_destination_ratio + 0.4 × min(1, fanout_change / 3)<br>candidate when graph_score ≥ graph_threshold</div>
+        <p>This adds direct detection of new relationships and sudden scanning-like fan-out. The explanation includes the new destination IPs.</p>
+
+        <h3>History and adaptation for all optional methods</h3>
+        <p>Known-normal folders and windows inside the capture-wide training interval enter history without producing candidates. Without training, the first <code>minimum_points</code> observations seed each stream; the next observation is the earliest that can be scored. Each method scores a current window before adding it to its rolling history. The history limit removes the oldest windows, so persistent new behavior gradually becomes the recent reference. Active and Shadow learn identically; only their effect on official output differs.</p>
       </section>
     </main>
   </div>
