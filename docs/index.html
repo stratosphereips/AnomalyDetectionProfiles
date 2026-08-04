@@ -216,7 +216,6 @@
       <strong>On this page</strong>
       <a href="#tour">Summary</a>
       <a href="#overview">1. Complete pipeline</a>
-      <a href="#experimental">Safe experiments</a>
       <a href="#input">2. Input and correlation</a>
       <a href="#windows">3. Time windows</a>
       <a href="#features">4. Feature extraction</a>
@@ -225,42 +224,43 @@
       <a href="#special">7. Specialized techniques</a>
       <a href="#adaptation">8. Model and adaptation</a>
       <a href="#ensemble">9. Global ensemble</a>
-      <a href="#multivariate">Experimental multivariate detector</a>
       <a href="#attribution">10. Explaining alerts</a>
       <a href="#walkthrough">11. Full example</a>
       <a href="#settings">12. Important settings</a>
+      <a href="#experimental">Experimental pipeline modes</a>
+      <a href="#multivariate">Experimental multivariate detector</a>
     </nav>
 
     <main>
       <section id="tour">
         <h2>Summary</h2>
         <p class="lead">This overview answers four questions: Where does the data come from? What numerical values are produced? What becomes an anomaly? What is updated afterward?</p>
-        <div class="callout good"><strong>One-sentence summary:</strong> Zeek records are correlated and grouped into time windows, each window becomes an explainable feature vector, every feature is compared with its own per-IP statistical history, threshold-crossing features become anomaly reasons, and corroborating component anomalies become a global IP anomaly before the models adapt.</div>
+        <div class="callout good"><strong>One-sentence summary:</strong> Zeek records are correlated and grouped into time windows, aggregation rules calculate one current value for every monitored feature, each current feature value is compared with that feature's previous window values, threshold-crossing values become anomaly reasons, and corroborating component anomalies become a global IP anomaly before the models adapt.</div>
 
         <h3>End-to-end data flow</h3>
         <div class="flow-diagram" role="group" aria-label="Data flow from Zeek logs through anomaly detection and model adaptation">
           <div class="flow-row">
             <div class="flow-node input"><strong>1. Zeek logs</strong><small><code>conn.log</code>, <code>dns.log</code>, HTTP, files, SSH, SSL…<br>Raw records with timestamp, IPs, UID/FUID, and protocol fields</small></div>
             <span class="flow-arrow" aria-hidden="true">→</span>
-            <div class="flow-node"><strong>2. Normalize + correlate</strong><small>Parse TSV/JSON, identify source/target IP, join exact UID/FUID context</small></div>
+            <div class="flow-node"><strong>2. Normalize + correlate</strong><small>Parse TSV/JSON, identify source/destination IP, join exact UID/FUID context</small></div>
             <span class="flow-arrow" aria-hidden="true">→</span>
-            <div class="flow-node"><strong>3. Time buckets</strong><small><code>(source IP, protocol, window)</code><br>and independent <code>(target IP, window)</code> buckets</small></div>
+            <div class="flow-node"><strong>3. Time windows</strong><small>One <code>(source IP, protocol, window)</code> group<br>and one independent <code>(destination IP, window)</code> group</small></div>
           </div>
           <div class="flow-down" aria-hidden="true">↓</div>
           <div class="flow-row">
-            <div class="flow-node"><strong>4. Feature vectors</strong><small>Counts, ratios, novelty, ports, bytes, entropy, URI/file/SSH/TLS values<br><code>{flow_count: 50, dga_ratio: 0.3, …}</code></small></div>
+            <div class="flow-node"><strong>4. Aggregate feature values</strong><small>Apply each measurement rule to the window's records<br><code>{flow_count: 50, dga_ratio: 0.3, …}</code></small></div>
             <span class="flow-arrow" aria-hidden="true">→</span>
-            <div class="flow-node model"><strong>5. Per-feature statistical models</strong><small><code>log1p</code> transform → mean/variance or median/MAD → noise floor → z-score</small></div>
+            <div class="flow-node model"><strong>5. Per-feature statistical models</strong><small><code>ln(1+x)</code> → mean/variance or median/MAD → noise floor → z-score</small></div>
             <span class="flow-arrow" aria-hidden="true">→</span>
-            <div class="flow-node gate"><strong>6. Reason gate</strong><small>If <code>z ≥ threshold / sensitivity</code>, that feature becomes one anomaly reason</small></div>
+            <div class="flow-node gate"><strong>6. Reason gate</strong><small>If <code>z ≥ threshold / sensitivity</code>, that current feature value becomes one anomaly reason</small></div>
           </div>
           <div class="flow-down" aria-hidden="true">↓</div>
           <div class="output-grid">
-            <div class="flow-node alert"><strong>Protocol-window anomaly</strong><small>Sum of anomalous feature z-scores, reasons, responsible records and IDs</small></div>
-            <div class="flow-node alert"><strong>Target-window anomaly</strong><small>Incoming count/source/port/protocol deviations for one destination</small></div>
+            <div class="flow-node alert"><strong>Source-IP/protocol/window anomaly</strong><small>One source, one protocol, one window; sum of the z-scores that crossed their feature thresholds</small></div>
+            <div class="flow-node alert"><strong>Destination-IP/window anomaly</strong><small>One destination and one window; incoming count/source/port/protocol feature deviations</small></div>
             <div class="flow-node gate"><strong>TLS flow alert</strong><small>Individual new server/JA3S or known-server byte evidence; supporting evidence only</small></div>
           </div>
-          <div class="flow-down caption">↓ Protocol and target anomalies vote; TLS flow alerts do not vote ↓</div>
+          <div class="flow-down caption">↓ Source-side and destination-side anomalies vote only inside the same (IP, window) group; TLS flow alerts do not vote ↓</div>
           <div class="flow-node global"><strong>7. Global IP ensemble</strong><small>Capped component contributions + multi-component bonus + exact responsible-UID bonus → global anomaly</small></div>
           <div class="feedback-loop">↺ 8. After scoring and alerting: fit trusted training, adapt normal/small windows with <code>drift_alpha</code>, or adapt strong anomalies slowly with <code>suspicious_alpha</code></div>
         </div>
@@ -268,24 +268,25 @@
         <h3>Five stages of the process</h3>
         <div class="tour-grid">
           <div class="tour-card"><div class="tour-time">Stage 1</div><h3>Records and identity</h3><p>Zeek produces protocol logs containing timestamps, endpoints, UID/FUID identifiers, and protocol fields. Missing TLS removes only TLS-specific detection.</p></div>
-          <div class="tour-card"><div class="tour-time">Stage 2</div><h3>Windows and features</h3><p>Records become comparable time buckets and then numeric counts, ratios, novelty, lexical, transfer, and authentication features.</p></div>
-          <div class="tour-card"><div class="tour-time">Stage 3</div><h3>Statistical comparison</h3><p>Per-IP and per-feature history supplies the <code>log1p</code>, median/MAD, noise-floor, z-score, and sensitivity-adjusted threshold calculations.</p></div>
+          <div class="tour-card"><div class="tour-time">Stage 2</div><h3>Windows and features</h3><p>Records from the same IP, protocol, and time interval are collected together and converted into numeric counts, ratios, novelty, lexical, transfer, and authentication features.</p></div>
+          <div class="tour-card"><div class="tour-time">Stage 3</div><h3>Statistical comparison</h3><p>Each current feature value is converted with <code>ln(1+x)</code> and compared with previous values of that same feature using their median or mean, measured spread, noise floor, z-score, and threshold.</p></div>
           <div class="tour-card"><div class="tour-time">Stage 4</div><h3>Reasons and adaptation</h3><p>Only threshold-crossing features become reasons. Welford fitting handles trusted training; EWMA handles ordinary drift and slower strong-anomaly adaptation.</p></div>
           <div class="tour-card"><div class="tour-time">Stage 5</div><h3>Outputs and evidence</h3><p>Flow, protocol, target, and global outputs retain their scores, responsible records, UID/FUID evidence, and contribution details.</p></div>
         </div>
 
         <h3>What exactly goes into each anomaly?</h3>
+        <p>The first column uses a descriptive name. The next columns show the literal values written to JSON, which retain older names for compatibility.</p>
         <div class="table-wrap"><table>
-          <thead><tr><th>Output</th><th>What can create it</th><th>Score</th><th>Does it enter the global ensemble?</th></tr></thead>
+          <thead><tr><th>Clear name</th><th>JSON <code>event</code></th><th>JSON <code>type</code></th><th>What creates it and how it is scored</th><th>Does it enter the global ensemble?</th></tr></thead>
           <tbody>
-            <tr><td><code>ssl-flow</code></td><td>One TLS flow with a new server, new JA3S, or statistically unusual bytes to a known server.</td><td>Flow reason evidence plus confidence metadata.</td><td><strong>No.</strong> It is supporting evidence.</td></tr>
-            <tr><td><code>protocol_anomaly</code></td><td>At least one source-IP/protocol window feature crosses its effective threshold.</td><td>Sum of the z-scores of crossing feature reasons.</td><td><strong>Yes.</strong> One capped vote per protocol component.</td></tr>
-            <tr><td><code>target_anomaly</code></td><td>At least one target-IP feature—such as incoming flows, sources, ports, protocols, or failure ratio—crosses its threshold.</td><td>Sum of its crossing feature z-scores.</td><td><strong>Yes.</strong> It is an independent target component.</td></tr>
-            <tr><td><code>global_anomaly</code></td><td>Protocol/target contributions reach the effective global score threshold, or enough independent components agree.</td><td>Capped component contributions + corroboration bonus + exact shared-UID bonus, bounded to 1.</td><td>It is the final combined output.</td></tr>
+            <tr><td><strong>TLS flow anomaly</strong></td><td><code>flow_anomaly</code></td><td><code>ssl-flow</code></td><td>One TLS flow has a new server, new JA3S, or statistically unusual bytes to a known server. It contains reasons and separate confidence metadata.</td><td><strong>No.</strong> It is supporting evidence.</td></tr>
+            <tr><td><strong>Source-IP/protocol/window anomaly</strong></td><td><code>protocol_anomaly</code></td><td><code>protocol-hour</code></td><td>At least one feature in one <code>(source IP, protocol, window)</code> group crosses its threshold. Its raw score is the sum of only the crossing z-scores.</td><td><strong>Yes.</strong> It votes under its source IP and window, as one component named by the protocol.</td></tr>
+            <tr><td><strong>Destination-IP/window anomaly</strong></td><td><code>target_anomaly</code></td><td><code>target-hour</code></td><td>At least one feature in one <code>(destination IP, window)</code> group crosses its threshold. Its raw score is the sum of only the crossing z-scores.</td><td><strong>Yes.</strong> It votes under its destination IP and window as one independent destination component.</td></tr>
+            <tr><td><strong>Global IP/window anomaly</strong></td><td><code>global_anomaly</code></td><td>Not present</td><td>Source-side and destination-side contributions in the same <code>(IP, window)</code> group, plus applicable bonuses, satisfy either global emission rule.</td><td>It is the final combined output.</td></tr>
           </tbody>
         </table></div>
-        <div class="callout warn"><strong>What does not create the score?</strong> Features below their threshold remain visible in window data but add no anomaly reason. UI “importance” changes sorting only. Shared FUIDs are explanatory but add no bonus. Sensor-health logs are excluded. An individual TLS flow alert does not vote globally.</div>
-        <p>The dashboard preserves this chain for inspection: Window data contains the original feature values and z-scores; protocol and target anomalies contain threshold-crossing reasons and responsible records; global anomalies contain the normalized contribution from every component.</p>
+        <div class="callout warn"><strong>What does not create the score?</strong> Current feature values whose z-scores remain below their feature-specific thresholds stay visible in window data but add no anomaly reason. UI “importance” changes sorting only. Shared FUIDs are explanatory but add no bonus. Sensor-health logs are excluded. An individual TLS flow alert does not vote globally.</div>
+        <p>The dashboard preserves this chain for inspection: window data contains the original feature values and z-scores; source-IP/protocol/window and destination-IP/window anomalies contain threshold-crossing reasons and responsible records; global anomalies contain the normalized contribution from every component.</p>
       </section>
 
       <section id="overview">
@@ -293,32 +294,15 @@
         <p class="lead">The detector does not ask whether one packet matches a malicious signature. It asks whether the current behavior of an IP is sufficiently different from that IP's learned history.</p>
         <div class="pipeline">
           <div class="step"><span class="step-num">1</span><h3>Read</h3><p>Parse the Zeek logs that are present. Missing TLS, SSH, or other logs do not stop the run.</p></div>
-          <div class="step"><span class="step-num">2</span><h3>Group</h3><p>Place records into source-IP/protocol/time-window buckets and target-IP buckets.</p></div>
+          <div class="step"><span class="step-num">2</span><h3>Group</h3><p>For each time interval, collect records once by source IP and protocol, and independently by destination IP.</p></div>
           <div class="step"><span class="step-num">3</span><h3>Measure</h3><p>Convert records into counts, ratios, novelty values, lexical signals, and transfer statistics.</p></div>
           <div class="step"><span class="step-num">4</span><h3>Compare</h3><p>Compare every current feature with its own adaptive historical model.</p></div>
-          <div class="step"><span class="step-num">5</span><h3>Decide</h3><p>A feature becomes a reason when its z-score reaches the effective threshold.</p></div>
+          <div class="step"><span class="step-num">5</span><h3>Decide</h3><p>A current feature value becomes a reason when its z-score reaches the effective threshold.</p></div>
           <div class="step"><span class="step-num">6</span><h3>Attribute</h3><p>Select the exact Zeek records, UIDs, and FUIDs that best explain each reason.</p></div>
-          <div class="step"><span class="step-num">7</span><h3>Combine</h3><p>Combine anomalous protocol and target components into one global IP score.</p></div>
+          <div class="step"><span class="step-num">7</span><h3>Combine</h3><p>Combine anomalous source-IP/protocol components and the destination-IP component into one global IP score.</p></div>
           <div class="step"><span class="step-num">8</span><h3>Adapt</h3><p>Update the model quickly for small drift and slowly for suspicious behavior.</p></div>
         </div>
         <div class="callout good"><strong>Key idea:</strong> feature definitions are fixed and understandable, but their normal values are learned separately for each IP and protocol. A high DNS count can be normal for a resolver and anomalous for a workstation.</div>
-      </section>
-
-      <section id="experimental">
-        <h2>Safe experimental modules</h2>
-        <p>The adaptive statistical detector shown throughout this page is the <strong>locked core</strong>. Experimental detectors are placed after the core has completed its feature scoring, anomaly decisions, and adaptation. This preserves a known-good result while a new technique is evaluated.</p>
-        <div class="grid-3">
-          <div class="card"><h3>Off</h3><p>The module is not executed. Its score and contribution are zero.</p></div>
-          <div class="card"><h3>Shadow = safe dry run</h3><p>The module executes and shows what it would select, but its contribution is forced to zero. It cannot add, remove, or modify an official anomaly.</p></div>
-          <div class="card"><h3>Active = trusted decision maker</h3><p>An Active detector is allowed to affect official anomaly decisions. Only the locked statistical core is Active today. Experimental modules do not currently offer Active mode.</p></div>
-        </div>
-        <div class="formula">module result = { status, eligible, score, candidate_contribution, contribution, reasons, top_features, responsible_uids, responsible_fuids }<br>Off or Shadow → contribution = 0<br>Active and eligible → contribution = candidate_contribution</div>
-        <p>The initial <code>noop_v1</code> module validates this control path. It deliberately returns score 0 and candidate contribution 0, including in Active mode. It is not another anomaly technique yet. If any experimental module raises an error, the pipeline reports that module as failed with contribution 0 and the core result remains available.</p>
-        <h3>Same-run comparison</h3>
-        <p>Final global decisions are identified as <code>source-IP@window-start</code>. The Pipeline comparison tab compares the core set with a module's candidate set:</p>
-        <div class="formula">overlap = core IDs ∩ module IDs<br>core only = core IDs − module IDs<br>module only = module IDs − core IDs<br>decision agreement = |overlap| / |core IDs ∪ module IDs|<br>score difference = mean(|core score − module score|) over overlapping IDs</div>
-        <p>The core is a stable reference, not ground truth. A module-only result is a disagreement to investigate, not automatically a false positive; a core-only result is not automatically a module failure. The initial <code>core_mirror_v1</code> module copies the core output and should therefore produce 100% agreement and zero score difference. This known answer validates the comparison path before a different model is introduced.</p>
-        <div class="callout good"><strong>How to read the dashboard:</strong> the core card is always Active and Locked, so it creates the official anomalies. A Shadow card means “calculated for comparison, zero official effect.” Changing a mode with Auto-run enabled starts a fresh run after 700 ms; otherwise press Run analysis.</div>
       </section>
 
       <section id="input">
@@ -341,28 +325,29 @@
   "resp_fuids": ["F4xyz"],
   "uri": "/download/update.bin"
 }</pre>
-        <div class="callout warn"><strong>No TLS is required.</strong> If <code>ssl.log</code> is absent, only TLS-specific features and flow alerts disappear. DNS, connection, SSH, HTTP, file, target-IP, and global detection still work.</div>
+        <div class="callout warn"><strong>No TLS is required.</strong> If <code>ssl.log</code> is absent, only TLS-specific features and flow alerts disappear. DNS, connection, SSH, HTTP, file, destination-IP, and global detection still work.</div>
       </section>
 
       <section id="windows">
         <h2>3. Records become time windows</h2>
-        <p>Statistical detection needs repeated comparable observations. The detector therefore aggregates traffic into windows of <code>window_seconds</code>.</p>
+        <p>Statistical detection needs repeated comparable observations. The detector therefore divides time into intervals of <code>window_seconds</code>. In this guide, a <strong>window</strong> means the records collected for one identity during one such interval.</p>
         <div class="formula">window_start = floor(Zeek timestamp / window_seconds) × window_seconds</div>
-        <p>With a 300-second window, timestamps 0–299 belong to the first window, 300–599 to the second, and so on. For source-side behavior, each model is keyed by:</p>
-        <div class="formula">(source IP, protocol, window)</div>
-        <p>A second detector view groups incoming behavior by target IP. This catches changes such as many sources or ports suddenly contacting one destination. <strong>These two bucket types do not receive the same converted features.</strong> They reuse the same eligible Zeek record, but convert it according to two different questions:</p>
+        <p>With a 300-second window, timestamps 0–299 belong to the first interval, 300–599 to the second, and so on. The detector creates two different views of those records:</p>
+        <div class="formula">source-IP/protocol window = records with the same source IP, protocol, and window start<br>destination-IP window = records with the same destination IP and window start</div>
+        <div class="callout"><strong>These are two different views, not two names for the same thing.</strong> A source-IP/protocol window asks how one source behaved in one protocol. A destination-IP window asks what traffic one destination received across all supported protocols.</div>
+        <p>The two window views reuse the same eligible Zeek records, but apply different feature definitions and therefore calculate different feature values:</p>
         <div class="table-wrap"><table>
-          <thead><tr><th></th><th>Source-IP/protocol/time-window bucket</th><th>Destination-IP/time-window bucket</th></tr></thead>
+          <thead><tr><th></th><th>Source-IP/protocol window</th><th>Destination-IP window</th></tr></thead>
           <tbody>
             <tr><td><strong>Key</strong></td><td><code>(source IP, protocol, window)</code></td><td><code>(destination IP, window)</code></td></tr>
             <tr><td><strong>Records combined</strong></td><td>Only records from one source and one protocol.</td><td>Incoming records from every source and every supported protocol for that destination.</td></tr>
-            <tr><td><strong>Converted feature vector</strong></td><td>Common source features plus fields and derived signals specific to that protocol.</td><td>A fixed seven-feature incoming-traffic vector.</td></tr>
-            <tr><td><strong>History used for “new”</strong></td><td>Previous values known by that exact source/protocol model.</td><td>Previous sources and ports known by that destination model.</td></tr>
+            <tr><td><strong>Feature values calculated</strong></td><td>Values for common source features plus fields and derived signals specific to that protocol.</td><td>Values for a fixed set of seven incoming-traffic features.</td></tr>
+            <tr><td><strong>History used for “new”</strong></td><td>Previous values known by that exact source-IP/protocol model.</td><td>Previous sources and ports known by that destination-IP model.</td></tr>
             <tr><td><strong>Main question</strong></td><td>“Is this source behaving unusually in this protocol?”</td><td>“Is this destination receiving unusual traffic?”</td></tr>
           </tbody>
         </table></div>
-        <div class="callout"><strong>Different feature schemas, same statistical machinery:</strong> after each bucket type produces its own numeric vector, every numeric feature follows the same downstream steps: <code>ln(1+x)</code>, comparison with that feature's own history, z-score, threshold decision, and adaptation. What differs is which numeric features are produced and which records/history belong to them.</div>
-        <div class="callout good"><strong>One record, two conversions:</strong> a connection from <code>10.0.0.5</code> to <code>192.0.2.20:443</code> updates the source vector <code>(10.0.0.5, conn, window)</code> with connection features such as peer, state, bytes, packets, and scan shape. The same record updates <code>(192.0.2.20, window)</code> only as incoming volume, source, destination port, protocol, novelty, and failure information. It is not scored twice using the same vector.</div>
+        <div class="callout"><strong>Different feature definitions, same statistical calculation:</strong> each window view calculates its own set of feature values. Every current feature value then follows the same downstream steps: <code>ln(1+x)</code>, comparison with previous values of that same feature, z-score, threshold decision, and adaptation. What differs is which feature values are calculated and which records and history belong to them.</div>
+        <div class="callout good"><strong>One record, two aggregations:</strong> a connection from <code>10.0.0.5</code> to <code>192.0.2.20:443</code> contributes to the source-IP/connection window identified by <code>(10.0.0.5, conn, window)</code>. There it affects feature values for peers, state, bytes, packets, and scan shape. The same record also contributes to the destination-IP window identified by <code>(192.0.2.20, window)</code>. There it affects only incoming-volume, source, destination-port, protocol, novelty, and failure feature values. The two aggregations perform different computations.</div>
         <div class="grid-3">
           <div class="card"><h3>One hour</h3><p><code>window_seconds = 3600</code><br>At most one observation per continuously active IP/protocol model.</p></div>
           <div class="card"><h3>Five minutes</h3><p><code>window_seconds = 300</code><br>At most twelve observations during one hour.</p></div>
@@ -373,25 +358,27 @@
 
       <section id="features">
         <h2>4. Feature extraction: what is measured?</h2>
-        <p>A feature is one numeric summary of a window. Each feature gets its own statistical model. Categorical values also produce <code>unique_*</code> and <code>new_*</code> counts.</p>
+        <div class="callout"><strong>Feature and feature value are different:</strong> a <strong>feature</strong> is a named measurement the detector tracks, together with its aggregation rule. During every active time window, Zeek records are aggregated according to that rule. The resulting number is the <strong>current feature value</strong>. This number enters the statistical computation; the feature definition itself does not.</div>
+        <div class="formula">feature definition: flow_count = count the matching records<br>records in current source-IP/DNS window = 47 DNS records<br>current feature value: flow_count = 47<br>statistical input: y = ln(1 + 47)</div>
+        <p>For every monitored feature, the detector calculates one value per active window and compares it with the values calculated for that same feature in previous windows. This sequence of previous values is the feature's history. Each feature has its own statistical model. Categorical fields can define features such as <code>unique_*</code> and <code>new_*</code> counts.</p>
 
-        <h3>Source-IP/protocol vectors: common features</h3>
-        <p>Every source-IP/protocol vector begins with the following features. Protocol-specific fields are added afterward, so a connection vector, DNS vector, and SSH vector do not have identical columns.</p>
+        <h3>Source-IP/protocol windows: common features</h3>
+        <p>Every source-IP/protocol window applies the following feature definitions. Protocol-specific definitions are added afterward, so connection, DNS, and SSH windows do not calculate identical sets of feature values.</p>
         <div class="table-wrap"><table>
-          <thead><tr><th>Feature</th><th>Meaning</th><th>Example</th></tr></thead>
+          <thead><tr><th>Feature</th><th>Aggregation performed during one window</th><th>Example feature value</th></tr></thead>
           <tbody>
-            <tr><td><code>flow_count</code></td><td>Records from one source IP in one protocol window.</td><td>47 DNS requests in five minutes.</td></tr>
-            <tr><td><code>unique_peers</code></td><td>Distinct destination IPs in the window.</td><td>A client contacted 18 servers.</td></tr>
-            <tr><td><code>new_peers</code></td><td>Destinations never previously seen by this source/protocol model.</td><td>Four first-seen servers.</td></tr>
-            <tr><td><code>failure_ratio</code></td><td>Failed records divided by all records.</td><td>8 failures / 10 flows = 0.8.</td></tr>
-            <tr><td><code>unique_F</code></td><td>Distinct values of categorical field F this window.</td><td>Six distinct DNS response codes.</td></tr>
-            <tr><td><code>new_F</code></td><td>Values of F absent from this model's previous history.</td><td>Two new HTTP user agents.</td></tr>
-            <tr><td><code>total_N</code>, <code>avg_N</code></td><td>Total and average of numeric field N.</td><td>Total response bytes and average duration.</td></tr>
+            <tr><td><code>flow_count</code></td><td>Count matching records from one source IP and protocol.</td><td><code>47</code> DNS records.</td></tr>
+            <tr><td><code>unique_peers</code></td><td>Collect destination IPs and count the distinct values.</td><td><code>18</code> distinct servers.</td></tr>
+            <tr><td><code>new_peers</code></td><td>Count destinations absent from this source-IP/protocol model's previous known set.</td><td><code>4</code> first-seen servers.</td></tr>
+            <tr><td><code>failure_ratio</code></td><td>Count failed records and divide by all matching records.</td><td><code>8 / 10 = 0.8</code>.</td></tr>
+            <tr><td><code>unique_F</code></td><td>Collect categorical field F and count the distinct values.</td><td><code>6</code> DNS response codes.</td></tr>
+            <tr><td><code>new_F</code></td><td>Count values of F absent from this model's previous known set.</td><td><code>2</code> new HTTP user agents.</td></tr>
+            <tr><td><code>total_N</code>, <code>avg_N</code></td><td>Sum numeric field N, and divide that sum by its number of observations for the average.</td><td>Total response bytes and average duration.</td></tr>
           </tbody>
         </table></div>
 
-        <h3>Destination-IP vectors: a different fixed schema</h3>
-        <p>The destination view does not reuse the source/protocol vector and does not include DNS entropy, connection scan shape, HTTP URI length, SSH software, or TLS server features. Across all incoming protocols, it converts a destination window into exactly these signals:</p>
+        <h3>Destination-IP windows: a different fixed feature list</h3>
+        <p>The destination-IP view does not reuse the source-IP/protocol feature list and does not include DNS entropy, connection scan shape, HTTP URI length, SSH software, or TLS server features. Across all incoming protocols, it converts one destination-IP window into exactly these signals:</p>
         <div class="table-wrap"><table>
           <thead><tr><th>Destination feature</th><th>Conversion from incoming Zeek records</th></tr></thead>
           <tbody>
@@ -404,7 +391,7 @@
             <tr><td><code>failure_ratio</code></td><td>Records satisfying their own protocol's failure rule divided by all incoming records.</td></tr>
           </tbody>
         </table></div>
-        <div class="formula">same Zeek records + source/protocol conversion → source/protocol feature vector<br>same Zeek records + destination conversion → destination feature vector<br>each feature in each vector → its own independent statistical history and z-score</div>
+        <div class="formula">same Zeek records + source-IP/protocol feature definitions → source-IP/protocol feature values<br>same Zeek records + destination-IP feature definitions → destination-IP feature values<br>each current feature value → history and model for that exact feature → z-score</div>
 
         <h3>Protocol-specific feature examples</h3>
         <div class="grid-2">
@@ -434,7 +421,7 @@
             <p>TLS has both window features and specialized flow evidence for new servers, new server fingerprints, and unusual bytes to a known server.</p>
           </div>
           <div class="card">
-            <h3>Target IP</h3>
+            <h3>Destination IP</h3>
             <span class="tag">incoming_flow_count</span><span class="tag">unique_sources</span><span class="tag">new_sources</span><span class="tag">unique_ports</span><span class="tag">unique_protocols</span>
             <p>This independent view finds destinations receiving unexpectedly broad or intense incoming activity.</p>
           </div>
@@ -443,7 +430,10 @@
 
       <section id="training">
         <h2>5. Learning normal behavior</h2>
-        <p>Normal is learned independently for every feature of every IP/protocol model. During explicit training, the first <code>training_hours</code> observed windows are assumed benign. The name is retained for compatibility: it counts windows, not literal hours when the configured window is smaller than 3600 seconds.</p>
+        <p><code>training_hours</code> defines one global interval at the beginning of the selected capture. It means literal elapsed hours, independently of <code>window_seconds</code> and independently of when a protocol first appears.</p>
+        <div class="formula">capture_start = timestamp of the first analyzed record<br>training_end = capture_start + training_hours × 3600 seconds<br>training traffic satisfies: capture_start ≤ record timestamp &lt; training_end</div>
+        <div class="callout good"><strong>Example:</strong> if the capture starts at 09:00 and <code>training_hours = 1</code>, only records from 09:00 up to but not including 10:00 are assumed benign. DNS records inside that interval can train DNS models. If SSH first appears at 11:00, it is already in the detection phase: no SSH value is fitted as trusted training merely because SSH had not appeared earlier.</div>
+        <p>Records inside the global interval are aggregated into windows and their feature values are fitted as training observations. If an ordinary aggregation window crosses <code>training_end</code>, the detector splits it at that exact timestamp. This prevents post-training records from entering a training value. Each feature model still learns independently, but all models share the same capture-wide training start and end.</p>
 
         <h3>Welford training</h3>
         <p>Welford's online algorithm updates the count, mean, and variance one observation at a time. It avoids storing the complete capture and is numerically stable.</p>
@@ -451,19 +441,36 @@
 
         <h3>Three ways to start</h3>
         <div class="grid-3">
-          <div class="card"><h3>Benign prefix</h3><p><code>training_hours &gt; 0</code>. The first N active windows of each model are fitted and cannot alert.</p></div>
+          <div class="card"><h3>Benign prefix</h3><p><code>training_hours &gt; 0</code>. All and only records inside the first N elapsed hours of the capture are eligible for trusted training and cannot alert.</p></div>
           <div class="card"><h3>External baseline</h3><p><code>normal_dirs</code>. Trusted folders are fitted silently before the selected capture. They must contain the same IP identities to train those exact models.</p></div>
           <div class="card"><h3>Cold start</h3><p><code>training_hours = 0</code>. Early windows adapt the model, but statistical z-scores remain zero until <code>minimum_points</code> observations exist.</p></div>
         </div>
-        <div class="callout warn"><strong>Zero training is not baseline-free detection.</strong> If <code>minimum_points = 8</code>, windows 1–8 seed the model and window 9 is the first statistically eligible window. Specialized TLS novelty can alert immediately in zero-training mode because it uses first-seen state rather than a statistical z-score.</div>
+        <div class="callout warn"><strong>A late protocol does not receive delayed training.</strong> A protocol or destination first seen after <code>training_end</code> starts with an empty model in detection mode. Its first <code>minimum_points</code> observations still produce statistical z-score zero and adapt through the ordinary cold-start EWMA path, but they are not labeled benign training and are not used for empirical threshold calibration.</div>
+        <div class="callout warn"><strong>Zero training is not baseline-free detection.</strong> If <code>training_hours = 0</code> and <code>minimum_points = 8</code>, windows 1–8 seed a newly observed model and window 9 is the first statistically eligible window. Specialized TLS novelty can alert immediately because it uses first-seen state rather than a statistical z-score.</div>
       </section>
 
       <section id="scoring">
-        <h2>6. How a feature becomes anomalous</h2>
-        <h3>Step A — compress heavy-tailed values</h3>
-        <p>Counts and byte values can span several orders of magnitude. Every non-negative feature is compressed before modeling:</p>
+        <h2>6. How the detector decides whether a feature value is anomalous</h2>
+        <h3>Step A — why transform every value with ln(1+x)?</h3>
+        <p><code>ln</code> is the natural logarithm. Network measurements such as connection counts and transferred bytes often have many ordinary small values and a few extremely large values. On the raw scale, an extreme value can pull the learned mean and variance strongly toward itself. The logarithm compresses the large end of the scale before the detector learns and compares values:</p>
         <div class="formula">y = ln(1 + max(0, raw_feature_value))</div>
-        <p>This makes multiplicative changes easier to compare and prevents one enormous transfer from dominating the model.</p>
+        <div class="table-wrap"><table>
+          <thead><tr><th>Raw value <code>x</code></th><th>Transformed value <code>ln(1+x)</code></th></tr></thead>
+          <tbody>
+            <tr><td><code>0</code></td><td><code>0.000</code></td></tr>
+            <tr><td><code>1</code></td><td><code>0.693</code></td></tr>
+            <tr><td><code>10</code></td><td><code>2.398</code></td></tr>
+            <tr><td><code>100</code></td><td><code>4.615</code></td></tr>
+            <tr><td><code>1000</code></td><td><code>6.909</code></td></tr>
+          </tbody>
+        </table></div>
+        <p>Raw increases from 10 to 100 and from 100 to 1000 differ by 90 and 900, but both are tenfold increases. After transformation, their differences are approximately 2.217 and 2.294. The detector can therefore model relative change more consistently instead of treating high-volume features as though their absolute scale were the important part.</p>
+        <div class="grid-3">
+          <div class="card"><h3>Why <code>ln</code>?</h3><p>It converts a ratio into a difference: <code>ln(1+b) − ln(1+a) = ln((1+b)/(1+a))</code>. Distance in transformed space therefore reflects relative changes more than raw absolute differences.</p></div>
+          <div class="card"><h3>Why add 1?</h3><p><code>ln(0)</code> is undefined. Using <code>ln(1+x)</code> keeps a raw zero valid and maps it to exactly zero.</p></div>
+          <div class="card"><h3>Why <code>max(0,x)</code>?</h3><p>All calculated feature values are intended to be non-negative. The maximum defensively prevents an unexpected negative value from entering the logarithm.</p></div>
+        </div>
+        <div class="callout warn"><strong>The logarithm does not remove an anomaly.</strong> It only changes the measurement scale. The current value and all historical values of that same feature are transformed identically, and the z-score is then calculated entirely in that transformed space.</div>
 
         <h3>Step B — measure distance from normal</h3>
         <p>When fewer than seven historical values are retained, the detector uses distance from the mean divided by the larger of standard deviation or the learned noise floor. With seven or more values, it uses the median and median absolute deviation (MAD), which are more resistant to outliers.</p>
@@ -546,7 +553,7 @@
         <div class="decision">
           <div class="node"><strong>z &lt; threshold</strong><br>no anomaly reason</div>
           <div class="arrow">or</div>
-          <div class="node yes"><strong>z ≥ threshold</strong><br>feature becomes an anomaly reason</div>
+          <div class="node yes"><strong>z ≥ threshold</strong><br>current feature value becomes an anomaly reason</div>
         </div>
 
         <h3>Every value through the equations</h3>
@@ -601,17 +608,17 @@
         <h2>8. What is the model, and exactly when does it adapt?</h2>
 
         <h3>The detection model is an online statistical model</h3>
-        <p>This is <strong>not a supervised attack classifier</strong> and it is not trained with malware labels. It is an unsupervised, online statistical detector. Every numeric feature has an independent <code>AdaptiveStats</code> model for one source-IP/protocol pair or one target IP. For example, the DNS <code>flow_count</code> of <code>10.0.0.25</code> has a different model from that IP's DNS <code>failure_ratio</code>, and both are separate from every other IP.</p>
+        <p>This is <strong>not a supervised attack classifier</strong> and it is not trained with malware labels. It is an unsupervised, online statistical detector. Every feature has an independent <code>AdaptiveStats</code> model that stores and learns from its feature values for one source-IP/protocol pair or one destination IP. For example, the DNS <code>flow_count</code> values of <code>10.0.0.25</code> enter a different model from that IP's DNS <code>failure_ratio</code> values, and both are separate from every other IP.</p>
         <div class="grid-3">
           <div class="card"><h3>Fixed feature logic</h3><p>Code converts Zeek records into understandable values such as counts, ratios, entropy, bytes, new peers, and authentication attempts.</p></div>
           <div class="card"><h3>Learned statistics</h3><p>Each feature model retains count, mean, variance, up to 256 recent transformed values, up to 64 residuals, a noise floor, and a threshold.</p></div>
-          <div class="card"><h3>Statistical decision</h3><p>The current feature becomes unusual when its robust distance from its own history reaches the sensitivity-adjusted threshold.</p></div>
+          <div class="card"><h3>Statistical decision</h3><p>The current feature value becomes unusual when its robust distance from the previous values of that same feature reaches the sensitivity-adjusted threshold.</p></div>
         </div>
         <div class="callout"><strong>Why this type of model?</strong> Network captures normally have no reliable labels saying “attack” or “benign,” and normal volume differs greatly between devices. Per-IP statistical models learn each device without labeled data, run incrementally with little memory, and produce a concrete feature value, baseline, z-score, and threshold that a human can audit. The trade-off is important: the model detects <em>deviation from learned behavior</em>, not malicious intent by itself.</div>
 
         <h3>Detection and adaptation are two separate decisions</h3>
-        <p>First, every feature is scored using the model as it existed before the current window. Feature thresholds decide which values become anomaly reasons. Only after all reasons are known does the detector choose an adaptation speed using the <strong>sum of anomalous z-scores</strong>.</p>
-        <div class="formula">feature decision: z ≥ feature_threshold / sensitivity → add one reason<br>protocol score A = Σ z of reasons that crossed their thresholds<br>adaptation decision: A ≤ adaptation_score → drift update; otherwise → suspicious update</div>
+        <p>First, every current feature value is scored using the model as it existed before the current window. The threshold for that feature decides whether its current value becomes an anomaly reason. Only after all reasons are known does the detector choose an adaptation speed using the <strong>sum of anomalous z-scores</strong>.</p>
+        <div class="formula">feature decision: z ≥ feature_threshold / sensitivity → add one reason<br>current window's anomaly score A = Σ z of reasons that crossed their thresholds<br>adaptation decision: A ≤ adaptation_score → drift update; otherwise → suspicious update</div>
         <div class="callout warn"><strong>Do not confuse the thresholds.</strong> The feature threshold decides whether an anomaly reason exists. <code>adaptation_score</code>, normally 8, does not create an alert; it decides how quickly the completed window is learned. The global ensemble threshold is later still and does not control feature-model adaptation.</div>
 
         <h3>Exact adaptation conditions</h3>
@@ -619,14 +626,15 @@
           <thead><tr><th>Situation</th><th>Can it emit a statistical anomaly?</th><th>How the model changes</th><th>Why</th></tr></thead>
           <tbody>
             <tr><td><strong>External known-normal folders</strong><br><code>normal_dirs</code></td><td>No. Detection output is suppressed.</td><td>Every observed window uses Welford <code>fit</code>. Thresholds are calibrated after all external baseline folders are fitted.</td><td>The user explicitly declared this traffic normal.</td></tr>
-            <tr><td><strong>Explicit training</strong><br><code>trained_windows &lt; training_hours</code></td><td>No. Reasons are suppressed even if a provisional z-score is large.</td><td>Every feature uses Welford <code>fit</code>; the window is recorded as <code>training_fit</code>.</td><td>Build an unbiased initial estimate from the assumed-benign prefix.</td></tr>
+            <tr><td><strong>Inside the capture-wide training interval</strong><br><code>window timestamp &lt; training_end</code></td><td>No. Reasons are suppressed even if a provisional z-score is large.</td><td>Every feature model fits its current feature value with Welford's method; the window is recorded as <code>training_fit</code>.</td><td>Use only feature values aggregated from records inside the user-declared benign time interval.</td></tr>
+            <tr><td><strong>Model first appears after training ends</strong></td><td>Only after it has <code>minimum_points</code> prior observations; before that its statistical z-score is zero.</td><td>It starts directly with detection-phase EWMA updates. It receives no trusted training values.</td><td>Training is tied to capture time, not postponed until every protocol appears.</td></tr>
             <tr><td><strong>No explicit training and insufficient history</strong><br><code>training_hours = 0</code> and <code>count &lt; minimum_points</code></td><td>No statistical reason: z-score is forced to zero.</td><td>The first value initializes the model. Later values use <code>drift_alpha</code>; mode is <code>drift_update</code>.</td><td>A distance cannot be trusted until enough prior observations exist.</td></tr>
-            <tr><td><strong>Detection with no anomaly reasons</strong><br><code>A = 0</code></td><td>No.</td><td>Every feature in the window uses EWMA with <code>drift_alpha</code>, normally 0.05.</td><td>Normal behavior should gradually follow legitimate operational change.</td></tr>
-            <tr><td><strong>Detection with a small anomaly</strong><br><code>0 &lt; A ≤ adaptation_score</code></td><td>Yes. An anomaly event is emitted.</td><td>Every feature in that IP/protocol window still uses <code>drift_alpha</code>.</td><td>A weak alert may be harmless drift; the detector learns it at the ordinary rate.</td></tr>
-            <tr><td><strong>Detection with a strong anomaly</strong><br><code>A &gt; adaptation_score</code></td><td>Yes. An anomaly event is emitted.</td><td>Every feature in that window uses <code>suspicious_alpha</code>, normally 0.005; mode is <code>suspicious_update</code>.</td><td>The model does not freeze, but suspicious behavior changes its mean/variance much more slowly, reducing baseline poisoning.</td></tr>
+            <tr><td><strong>Detection with no anomaly reasons</strong><br><code>A = 0</code></td><td>No.</td><td>Every feature model updates from its current feature value using EWMA with <code>drift_alpha</code>, normally 0.05.</td><td>Normal behavior should gradually follow legitimate operational change.</td></tr>
+            <tr><td><strong>Detection with a small anomaly</strong><br><code>0 &lt; A ≤ adaptation_score</code></td><td>Yes. An anomaly event is emitted.</td><td>Every feature model for that source-IP/protocol window or destination-IP window still updates with <code>drift_alpha</code>.</td><td>A weak alert may be harmless drift; the detector learns it at the ordinary rate.</td></tr>
+            <tr><td><strong>Detection with a strong anomaly</strong><br><code>A &gt; adaptation_score</code></td><td>Yes. An anomaly event is emitted.</td><td>Every feature model for that window updates with <code>suspicious_alpha</code>, normally 0.005; mode is <code>suspicious_update</code>.</td><td>The model does not freeze, but suspicious behavior changes its mean/variance much more slowly, reducing baseline poisoning.</td></tr>
           </tbody>
         </table></div>
-        <p>The adaptation rate is selected from the <strong>total protocol-window score</strong>, not separately for each feature. If one or more reasons push the sum above <code>adaptation_score</code>, all feature models in that source-IP/protocol window receive the slow suspicious update. Target-IP models use the same rule.</p>
+        <p>The adaptation rate is selected from the <strong>total score of one source-IP/protocol window</strong>, not separately for each feature. If one or more reasons push the sum above <code>adaptation_score</code>, every feature model for that window receives the slow suspicious update. Destination-IP windows use the same rule.</p>
 
         <h3>How training adaptation works: equal-weight Welford fitting</h3>
         <p>During trusted training, all fitted windows have equal weight. If the old model contains <code>n</code> values, Welford adds the new transformed value <code>y</code> exactly:</p>
@@ -655,7 +663,7 @@
         </table></div>
 
         <h3>Special case: TLS per-server byte models</h3>
-        <p>TLS also maintains a byte-volume model for each known server. Before SSL training completes, matching byte values use Welford fitting. During detection, a TLS flow with no reasons uses <code>ssl_baseline_alpha</code>; a flow with at most <code>ssl_max_small_anomalies</code> reasons uses <code>drift_alpha</code>; a flow with more reasons uses <code>suspicious_alpha</code>. This per-flow byte update is separate from the SSL protocol-window adaptation described above.</p>
+        <p>TLS also maintains a byte-volume model for each known server. Before SSL training completes, matching byte values use Welford fitting. During detection, a TLS flow with no reasons uses <code>ssl_baseline_alpha</code>; a flow with at most <code>ssl_max_small_anomalies</code> reasons uses <code>drift_alpha</code>; a flow with more reasons uses <code>suspicious_alpha</code>. This per-flow byte update is separate from the source-IP/SSL/window adaptation described above.</p>
 
         <div class="callout warn"><strong>Why adapt anomalous traffic at all?</strong> Freezing forever after an alert would make a legitimate permanent change alert forever. Learning every alert quickly would let repeated attacks poison the baseline. The design takes the middle path: always remain adaptive, use robust median/MAD to tolerate isolated outliers, and slow the mean/variance update when the aggregate evidence is strong.</div>
         <p>The current observation is always scored against the model that existed <em>before</em> that observation. Alert emission comes first; adaptation happens afterward.</p>
@@ -663,66 +671,31 @@
 
       <section id="ensemble">
         <h2>9. From feature reasons to a global IP anomaly</h2>
-        <h3>Protocol score</h3>
-        <p>Every feature whose z-score crosses its threshold becomes a reason. A protocol-window anomaly score is the sum of those reason z-scores:</p>
-        <div class="formula">protocol_score = Σ anomalous_feature_zscores<br>protocol_contribution = min(protocol_score, protocol_score_cap) / protocol_score_cap</div>
-        <p>The cap prevents a noisy high-volume protocol from dominating every other source of evidence.</p>
+        <div class="callout"><strong>Terminology:</strong> the JSON event is called <code>protocol_anomaly</code>, but it is not one anomaly for DNS or HTTP across the network. It means one anomaly for one exact <code>(source IP, protocol, window_start)</code> group. The clearer name used below is <strong>source-IP/protocol/window anomaly</strong>.</div>
 
-        <h3>Corroboration</h3>
-        <p>Anomalous protocol windows and anomalous target-IP windows for the same IP and time window become independent components. Additional components receive a capped protocol corroboration bonus. Exact responsible UIDs shared across at least two anomalous components receive a second capped bonus.</p>
-        <div class="formula">global_score = min(1, Σ contributions + protocol_bonus + exact_UID_bonus)</div>
-        <p>A global event is emitted when the score reaches the sensitivity-adjusted global threshold, or when enough independent components agree.</p>
-        <div class="callout good"><strong>Example:</strong> DNS contributes 0.30, HTTP contributes 0.30, and the second component adds 0.15. The global score is 0.75. If the responsible DNS and HTTP records share one exact UID, the default UID bonus adds 0.10, raising it to 0.85.</div>
-      </section>
+        <h3>1. Compute one source-IP/protocol/window anomaly</h3>
+        <p>Consider the source-IP/protocol window identified by <code>(10.0.0.5, dns, 12:00)</code>. Every DNS feature has its own model. That model calculates a z-score for the current feature value. Values whose z-scores remain below their thresholds add nothing. If the current <code>flow_count</code> value produces <code>z=4.2</code> and the current <code>dga_ratio</code> value produces <code>z=3.8</code>, and both cross their thresholds, the detector creates one DNS anomaly:</p>
+        <div class="formula">source_protocol_window_score = 4.2 + 3.8 = 8.0<br>source_protocol_window_contribution = min(8.0, 10.0) / 10.0 = 0.80</div>
+        <p>The default contribution cap is <code>protocol_score_cap = 10</code>. A raw score of 4 contributes 0.4; a score of 8 contributes 0.8; every score of 10 or more contributes 1.0. This prevents one component containing many extreme features from contributing more than the complete global-score range.</p>
 
-      <section id="multivariate">
-        <h2>Experimental multivariate feature-relationship detector</h2>
-        <div class="callout"><strong>This method comes after the statistical detector.</strong> Everything above—feature conversion, per-feature z-scores, adaptation, and the global ensemble—is the locked statistical core that creates official anomalies. The method below is a separate experimental model running in Shadow mode.</div>
-        <p>The core asks whether each converted feature is unusual separately. The multivariate model asks whether the <strong>combination</strong> and relationship among the converted features is unusual. Version 1 receives only the vectors produced for <code>(source IP, protocol, time window)</code>. It does not receive destination-window vectors or individual TLS flow alerts.</p>
-        <h3>Plain-language process</h3>
-        <div class="pipeline">
-          <div class="step"><span class="step-num">1</span><h3>Receive a converted row</h3><p>The ordinary source/protocol bucket has already converted its Zeek records into one numeric feature vector.</p></div>
-          <div class="step"><span class="step-num">2</span><h3>Learn relationships</h3><p>Earlier vectors teach which features normally rise, fall, or remain stable together.</p></div>
-          <div class="step"><span class="step-num">3</span><h3>Measure the new vector</h3><p>The model calculates one raw joint distance from the learned feature pattern.</p></div>
-          <div class="step"><span class="step-num">4</span><h3>Suggest only</h3><p>If distance reaches the threshold, a Shadow candidate appears. Official anomalies remain unchanged.</p></div>
-        </div>
-        <div class="callout good"><strong>Example:</strong> a DNS window's query count and response count can each fall inside their ordinary ranges. If those two values normally rise and fall together, an ordinary query count combined with an ordinary but mismatched response count can still be a new joint pattern. Covariance represents that learned relationship.</div>
+        <h3>2. Compute one destination-IP/window anomaly independently</h3>
+        <p>The destination-IP window identified by <code>(192.0.2.20, 12:00)</code> has a different list of features and different feature histories. Suppose <code>new_sources</code> has <code>z=3.7</code> and <code>unique_ports</code> has <code>z=4.3</code>, with both crossing their thresholds:</p>
+        <div class="formula">destination_window_score = 3.7 + 4.3 = 8.0<br>destination_window_contribution = min(8.0, 10.0) / 10.0 = 0.80</div>
+        <p>The calculation is numerically the same, but the input features and model key are different. The destination event becomes one component named <code>target:192.0.2.20</code> inside the ensemble.</p>
 
-        <h3>Reading one dashboard candidate</h3>
-        <div class="table-wrap"><table>
-          <thead><tr><th>Displayed value</th><th>Meaning</th></tr></thead>
-          <tbody>
-            <tr><td>Source IP and window start</td><td>The host and exact time bucket whose complete feature combination was evaluated.</td></tr>
-            <tr><td>Protocol</td><td>The independent per-protocol model, such as <code>conn</code> or <code>dns</code>.</td></tr>
-            <tr><td>Raw joint distance</td><td>The actual multivariate score used in the threshold comparison.</td></tr>
-            <tr><td>Threshold</td><td>The required raw distance. A candidate exists only when distance is at least this value.</td></tr>
-            <tr><td>Normalized display score</td><td>A bounded 0–1 visualization. It is <strong>not probability, confidence, severity, or maliciousness</strong>.</td></tr>
-            <tr><td>Strongest contributing features</td><td>The feature dimensions that contributed most to joint distance. They need not be individually anomalous.</td></tr>
-            <tr><td>Shadow · no official effect</td><td>The candidate is available for investigation but did not change any official anomaly.</td></tr>
-          </tbody>
-        </table></div>
+        <h3>3. Group components by the exact same IP and window</h3>
+        <div class="formula">global grouping key = (IP, window_start)<br><br>source-IP/protocol/window anomaly → IP = its source IP<br>destination-IP/window anomaly → IP = its destination IP</div>
+        <div class="callout warn"><strong>This is the relationship:</strong> source-side and destination-side anomalies are not joined merely because they describe the same connection. For a flow <code>10.0.0.5 → 192.0.2.20</code>, the source/DNS anomaly votes in group <code>(10.0.0.5, 12:00)</code>, while the destination anomaly votes in group <code>(192.0.2.20, 12:00)</code>. They therefore form two different possible global-IP events. A destination component combines with source-protocol components only when their IP value and window start are identical—for example, when IP <code>10.0.0.5</code> has source-side anomalies and also receives anomalous traffic during the same window.</div>
 
-        <h3>Exact calculation</h3>
-        <p>One model is maintained for each <code>(source IP, protocol)</code>. Suppose its current window contains <code>p</code> numeric features.</p>
-        <div class="formula">1. Transform each feature j:<br>yⱼ = ln(1 + max(0, xⱼ))<br><br>2. Robustly standardize it from historical windows:<br>mⱼ = median(yⱼ history)<br>sⱼ = max(0.05, 1.4826 × median(|yⱼ − mⱼ|))<br>uⱼ = (yⱼ − mⱼ) / sⱼ<br><br>3. Learn covariance C from the historical standardized vectors.<br><br>4. Regularize unstable correlations with shrinkage λ:<br>C*ⱼₖ = (1 − λ) × Cⱼₖ, when j ≠ k<br>C*ⱼⱼ = max(Cⱼⱼ, 0.05) + 0.05<br><br>5. Measure joint distance from the historical standardized mean ū:<br>δ = u_current − ū<br>D² = δᵀ (C*)⁻¹ δ<br>multivariate_score = √(D² / p)<br><br>6. Candidate decision:<br>multivariate_score ≥ multivariate_threshold</div>
-        <p>Dividing by the number of features before taking the square root makes scores more comparable across protocols with different vector sizes. Covariance shrinkage reduces unreliable off-diagonal relationships when only a small baseline is available. A shrinkage of 1 removes all correlations and leaves a variance-only model; lower values retain more learned relationships.</p>
+        <h3>4. Combine all components in one group</h3>
+        <p>Inside one <code>(IP, window)</code> group, DNS, HTTP, connection, SSH, and the destination component are separate votes. The first component contributes its normalized score. Each additional component adds the configured corroboration bonus, capped globally. Exact responsible UIDs present in at least two components add another capped bonus. Shared FUIDs are reported but do not add score.</p>
+        <div class="formula">vote_sum = Σ normalized component contributions<br>component_bonus = min(corroboration_bonus_cap, (component_count − 1) × corroboration_bonus)<br>UID_bonus = min(uid_bonus_cap, shared_UID_count × uid_bonus)<br>global_score = min(1, vote_sum + component_bonus + UID_bonus)</div>
+        <p>With the defaults, <code>corroboration_bonus = 0.15</code>, its cap is <code>0.30</code>, each shared UID adds <code>0.10</code>, and the UID-bonus cap is <code>0.20</code>.</p>
 
-        <h3>Baseline, adaptation, and short captures</h3>
-        <div class="table-wrap"><table>
-          <thead><tr><th>Condition</th><th>Behavior</th></tr></thead>
-          <tbody>
-            <tr><td>External known-normal window</td><td>Always enters the multivariate history and cannot emit a candidate.</td></tr>
-            <tr><td>Core training-phase window</td><td>Enters history and cannot emit a multivariate candidate.</td></tr>
-            <tr><td>Fewer than <code>multivariate_minimum_points</code></td><td>The window seeds the covariance baseline. No joint distance is trusted yet.</td></tr>
-            <tr><td>Enough history</td><td>The current vector is scored against history <em>before</em> it is learned.</td></tr>
-            <tr><td>After scoring</td><td>The vector enters the rolling history. Only the most recent <code>multivariate_history_limit</code> windows are retained, so persistent behavior eventually replaces old behavior.</td></tr>
-          </tbody>
-        </table></div>
-        <p>With the defaults, the ninth observed window is the earliest possible multivariate comparison when there is no explicit training or external baseline. A one-hour capture therefore needs windows shorter than about seven minutes to provide nine continuously active windows for the same IP/protocol stream; five-minute windows provide at most twelve.</p>
-
-        <h3>Explanation and safety</h3>
-        <p>For a candidate, the module reports the protocols involved, responsible UIDs/FUIDs, and the five largest feature-distance contributions. A feature contribution is ranked by <code>|δⱼ × ((C*)⁻¹δ)ⱼ|</code>. This is an explanation of which dimensions drove joint distance; it is not a separate univariate threshold test.</p>
-        <div class="callout warn"><strong>Shadow-only evaluation:</strong> the dashboard intentionally offers only Off and Shadow for this model. Its candidate contribution is zero, it cannot create or modify a global anomaly, and every run rebuilds it from the selected capture and optional normal folders. Pipeline comparison shows where it agrees and disagrees with the locked core.</div>
+        <h3>5. Decide whether to emit the global anomaly</h3>
+        <div class="formula">effective_global_threshold = min(1, global_threshold / sensitivity)<br>effective_minimum_components = max(1, ceil(minimum_protocols / sensitivity))<br><br>emit if global_score ≥ effective_global_threshold<br>OR if component_count ≥ effective_minimum_components</div>
+        <p>The configuration name <code>minimum_protocols</code> is historical: the implementation counts independent components, and the destination component is included in that count. With default sensitivity 1, the score threshold is 0.65 and the component-count gate is 2.</p>
+        <div class="callout good"><strong>Complete example for one IP and window:</strong> a DNS anomaly with raw score 4 contributes 0.40. An HTTP anomaly with raw score 3 contributes 0.30. Their vote sum is 0.70. Because two components exist, the corroboration bonus is 0.15, producing 0.85. If they share one responsible UID, another 0.10 produces <code>global_score = 0.95</code>. The global event stores both component anomalies and their feature-level reasons.</div>
       </section>
 
       <section id="attribution">
@@ -767,18 +740,87 @@
           <thead><tr><th>Setting</th><th>Effect</th><th>Practical guidance</th></tr></thead>
           <tbody>
             <tr><td><code>window_seconds</code></td><td>Changes aggregation resolution.</td><td>Use 300 for short captures; use 3600 for smoother long-term behavior.</td></tr>
-            <tr><td><code>training_hours</code></td><td>Number of observed windows assumed benign.</td><td>Use only when the initial traffic is trusted.</td></tr>
+            <tr><td><code>training_hours</code></td><td>Length in elapsed hours of the one capture-wide benign interval beginning at the first analyzed record.</td><td>Use only when that exact initial time interval is trusted.</td></tr>
             <tr><td><code>normal_dirs</code></td><td>Fits known-normal folders before analysis.</td><td>Paths are on the server running the dashboard. Use the same IPs and window size.</td></tr>
             <tr><td><code>minimum_points</code></td><td>History required before statistical z-scores become nonzero.</td><td>Lower values detect sooner but are less stable.</td></tr>
             <tr><td><code>sensitivity</code></td><td>Divides feature/global thresholds and adjusts the component-count gate.</td><td>Above 1 emits more; below 1 emits fewer.</td></tr>
             <tr><td><code>threshold</code></td><td>Fallback feature z-score threshold.</td><td>Higher means a feature must deviate further.</td></tr>
             <tr><td><code>drift_alpha</code></td><td>Adaptation speed for small changes.</td><td>Higher follows legitimate change faster.</td></tr>
             <tr><td><code>suspicious_alpha</code></td><td>Adaptation speed for suspicious changes.</td><td>Keep much smaller than drift alpha.</td></tr>
-            <tr><td><code>global_threshold</code></td><td>Score required for a global event.</td><td>Controls cross-protocol alert strictness.</td></tr>
+            <tr><td><code>protocol_score_cap</code></td><td>Caps and normalizes the raw score of each source-IP/protocol component and the destination-IP component.</td><td>Prevents one component from contributing more than 1 to the ensemble.</td></tr>
+            <tr><td><code>global_threshold</code></td><td>Score required by the score-based global emission rule.</td><td>Controls cross-component alert strictness.</td></tr>
+            <tr><td><code>minimum_protocols</code></td><td>Number of independent components required by the alternative count-based global emission rule; despite its legacy name, the destination component counts.</td><td>With sensitivity 1, the default requires two components.</td></tr>
             <tr><td><code>uid_corroboration_bonus</code></td><td>Rewards exact responsible UIDs shared by anomalous components.</td><td>Keep capped so identifiers strengthen evidence without dominating it.</td></tr>
           </tbody>
         </table></div>
         <div class="callout"><strong>Dashboard behavior:</strong> changing a configuration value reruns the complete analysis. Models are rebuilt from the selected input and optional normal folders, so the displayed result always corresponds to the visible settings.</div>
+      </section>
+
+      <section id="experimental">
+        <h2>Safe experimental modules</h2>
+        <div class="callout"><strong>The complete locked-core explanation ends above.</strong> Everything from this point onward describes optional experimental machinery. It is not part of the statistical method that creates the official anomalies shown in sections 1–12.</div>
+        <p>The adaptive statistical detector shown throughout this page is the <strong>locked core</strong>. Experimental detectors are placed after the core has completed its feature scoring, anomaly decisions, and adaptation. This preserves a known-good result while a new technique is evaluated.</p>
+        <div class="grid-3">
+          <div class="card"><h3>Off</h3><p>The module is not executed. Its score and contribution are zero.</p></div>
+          <div class="card"><h3>Shadow = safe dry run</h3><p>The module executes and shows what it would select, but its contribution is forced to zero. It cannot add, remove, or modify an official anomaly.</p></div>
+          <div class="card"><h3>Active = trusted decision maker</h3><p>An Active detector is allowed to affect official anomaly decisions. Only the locked statistical core is Active today. Experimental modules do not currently offer Active mode.</p></div>
+        </div>
+        <div class="formula">module result = { status, eligible, score, candidate_contribution, contribution, reasons, top_features, responsible_uids, responsible_fuids }<br>Off or Shadow → contribution = 0<br>Active and eligible → contribution = candidate_contribution</div>
+        <p>The initial <code>noop_v1</code> module validates this control path. It deliberately returns score 0 and candidate contribution 0, including in Active mode. It is not another anomaly technique yet. If any experimental module raises an error, the pipeline reports that module as failed with contribution 0 and the core result remains available.</p>
+        <h3>Same-run comparison</h3>
+        <p>Final global decisions are identified as <code>IP@window-start</code>. The IP may have entered the group through a source-IP/protocol/window anomaly, a destination-IP/window anomaly, or both. The Pipeline comparison tab compares the core set with a module's candidate set:</p>
+        <div class="formula">overlap = core IDs ∩ module IDs<br>core only = core IDs − module IDs<br>module only = module IDs − core IDs<br>decision agreement = |overlap| / |core IDs ∪ module IDs|<br>score difference = mean(|core score − module score|) over overlapping IDs</div>
+        <p>The core is a stable reference, not ground truth. A module-only result is a disagreement to investigate, not automatically a false positive; a core-only result is not automatically a module failure. The initial <code>core_mirror_v1</code> module copies the core output and should therefore produce 100% agreement and zero score difference. This known answer validates the comparison path before a different model is introduced.</p>
+        <div class="callout good"><strong>How to read the dashboard:</strong> the core card is always Active and Locked, so it creates the official anomalies. A Shadow card means “calculated for comparison, zero official effect.” Changing a mode with Auto-run enabled starts a fresh run after 700 ms; otherwise press Run analysis.</div>
+      </section>
+
+      <section id="multivariate">
+        <h2>Experimental multivariate feature-relationship detector</h2>
+        <p>The core asks whether each current feature value is unusual separately. The multivariate model asks whether the <strong>combination</strong> and relationship among all current feature values is unusual. It receives the ordered list of numeric values calculated for one <code>(source IP, protocol, time window)</code>. In the mathematics below, an ordered list of numbers is called a <strong>vector</strong>. Version 1 does not receive destination-IP window feature values or individual TLS flow alerts.</p>
+        <h3>Plain-language process</h3>
+        <div class="pipeline">
+          <div class="step"><span class="step-num">1</span><h3>Receive a converted row</h3><p>The source-IP/protocol window has already converted its Zeek records into an ordered list of numeric feature values. In the equation below, that ordered list is called a vector.</p></div>
+          <div class="step"><span class="step-num">2</span><h3>Learn relationships</h3><p>Earlier vectors teach which features normally rise, fall, or remain stable together.</p></div>
+          <div class="step"><span class="step-num">3</span><h3>Measure the new vector</h3><p>The model calculates one raw joint distance from the learned feature pattern.</p></div>
+          <div class="step"><span class="step-num">4</span><h3>Suggest only</h3><p>If distance reaches the threshold, a Shadow candidate appears. Official anomalies remain unchanged.</p></div>
+        </div>
+        <div class="callout good"><strong>Example:</strong> a DNS window's query count and response count can each fall inside their ordinary ranges. If those two values normally rise and fall together, an ordinary query count combined with an ordinary but mismatched response count can still be a new joint pattern. Covariance represents that learned relationship.</div>
+
+        <h3>Reading one dashboard candidate</h3>
+        <div class="table-wrap"><table>
+          <thead><tr><th>Displayed value</th><th>Meaning</th></tr></thead>
+          <tbody>
+            <tr><td>Source IP and window start</td><td>The source and exact time window whose complete feature combination was evaluated.</td></tr>
+            <tr><td>Protocol</td><td>The independent per-protocol model, such as <code>conn</code> or <code>dns</code>.</td></tr>
+            <tr><td>Raw joint distance</td><td>The actual multivariate score used in the threshold comparison.</td></tr>
+            <tr><td>Threshold</td><td>The required raw distance. A candidate exists only when distance is at least this value.</td></tr>
+            <tr><td>Normalized display score</td><td>A bounded 0–1 visualization. It is <strong>not probability, confidence, severity, or maliciousness</strong>.</td></tr>
+            <tr><td>Strongest contributing features</td><td>The feature dimensions that contributed most to joint distance. They need not be individually anomalous.</td></tr>
+            <tr><td>Shadow · no official effect</td><td>The candidate is available for investigation but did not change any official anomaly.</td></tr>
+          </tbody>
+        </table></div>
+
+        <h3>Exact calculation</h3>
+        <p>One model is maintained for each <code>(source IP, protocol)</code>. Suppose its current window contains <code>p</code> numeric features.</p>
+        <div class="formula">1. Transform each feature j:<br>yⱼ = ln(1 + max(0, xⱼ))<br><br>2. Robustly standardize it from historical windows:<br>mⱼ = median(yⱼ history)<br>sⱼ = max(0.05, 1.4826 × median(|yⱼ − mⱼ|))<br>uⱼ = (yⱼ − mⱼ) / sⱼ<br><br>3. Learn covariance C from the historical standardized vectors.<br><br>4. Regularize unstable correlations with shrinkage λ:<br>C*ⱼₖ = (1 − λ) × Cⱼₖ, when j ≠ k<br>C*ⱼⱼ = max(Cⱼⱼ, 0.05) + 0.05<br><br>5. Measure joint distance from the historical standardized mean ū:<br>δ = u_current − ū<br>D² = δᵀ (C*)⁻¹ δ<br>multivariate_score = √(D² / p)<br><br>6. Candidate decision:<br>multivariate_score ≥ multivariate_threshold</div>
+        <p>Dividing by the number of features before taking the square root makes scores more comparable across protocols with different vector sizes. Covariance shrinkage reduces unreliable off-diagonal relationships when only a small baseline is available. A shrinkage of 1 removes all correlations and leaves a variance-only model; lower values retain more learned relationships.</p>
+
+        <h3>Baseline, adaptation, and short captures</h3>
+        <div class="table-wrap"><table>
+          <thead><tr><th>Condition</th><th>Behavior</th></tr></thead>
+          <tbody>
+            <tr><td>External known-normal window</td><td>Always enters the multivariate history and cannot emit a candidate.</td></tr>
+            <tr><td>Core training-phase window</td><td>Enters history and cannot emit a multivariate candidate.</td></tr>
+            <tr><td>Fewer than <code>multivariate_minimum_points</code></td><td>The window seeds the covariance baseline. No joint distance is trusted yet.</td></tr>
+            <tr><td>Enough history</td><td>The current vector is scored against history <em>before</em> it is learned.</td></tr>
+            <tr><td>After scoring</td><td>The vector enters the rolling history. Only the most recent <code>multivariate_history_limit</code> windows are retained, so persistent behavior eventually replaces old behavior.</td></tr>
+          </tbody>
+        </table></div>
+        <p>With the defaults, the ninth observed window is the earliest possible multivariate comparison when there is no explicit training or external baseline. A one-hour capture therefore needs windows shorter than about seven minutes to provide nine continuously active windows for the same IP/protocol stream; five-minute windows provide at most twelve.</p>
+
+        <h3>Explanation and safety</h3>
+        <p>For a candidate, the module reports the protocols involved, responsible UIDs/FUIDs, and the five largest feature-distance contributions. A feature contribution is ranked by <code>|δⱼ × ((C*)⁻¹δ)ⱼ|</code>. This is an explanation of which dimensions drove joint distance; it is not a separate univariate threshold test.</p>
+        <div class="callout warn"><strong>Shadow-only evaluation:</strong> the dashboard intentionally offers only Off and Shadow for this model. Its candidate contribution is zero, it cannot create or modify a global anomaly, and every run rebuilds it from the selected capture and optional normal folders. Pipeline comparison shows where it agrees and disagrees with the locked core.</div>
       </section>
     </main>
   </div>
@@ -920,7 +962,7 @@
         `<div class="equation-step final"><span class="eq-number">7</span><div><div class="eq-title">Final feature decision</div>` +
         `<div class="eq-formula">z ${comparison} effective_threshold → ${z.toFixed(4)} ${comparison} ${effective.toFixed(4)}</div>` +
         `<div class="eq-meaning"><span class="verdict ${anomaly ? "anomaly" : "normal"}">${anomaly ? "ANOMALY REASON" : "NO ANOMALY REASON"}</span> ` +
-        `${anomaly ? "This feature is added to the protocol anomaly reasons." : "This feature does not contribute a reason or score in this window."}</div></div></div></div>`;
+        `${anomaly ? "This current feature value is added to the window's anomaly reasons." : "This current feature value does not contribute a reason or score in this window."}</div></div></div></div>`;
     }
 
     calculatorInputs.forEach(id => document.getElementById(id).addEventListener("input", updateCalculator));
