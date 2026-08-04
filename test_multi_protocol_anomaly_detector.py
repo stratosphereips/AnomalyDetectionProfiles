@@ -20,7 +20,7 @@ from multi_protocol_anomaly_detector import (
 
 def arguments():
     return argparse.Namespace(
-        training_hours=1,
+        training_windows=1,
         window_seconds=3600,
         sensitivity=1.0,
         ignore_multicast_broadcast=True,
@@ -75,7 +75,7 @@ class MultiProtocolTests(unittest.TestCase):
                     main(
                         [
                             str(zeek), "--window-seconds", "300",
-                            "--training-hours", "1", "--minimum-points", "1",
+                            "--training-windows", "1", "--minimum-points", "1",
                             "--experimental-noop-mode", "off",
                             "--experimental-multivariate-mode", mode, "--quiet",
                             "--no-terminal-data", "-o", str(output),
@@ -100,6 +100,7 @@ class MultiProtocolTests(unittest.TestCase):
         self.assertEqual(bucket_start(600.0, 300), 600)
         with tempfile.TemporaryDirectory() as temp:
             args = arguments()
+            args.training_windows = 0
             args.window_seconds = 300
             output = Outputs(Path(temp), quiet=True)
             detector = MultiProtocolDetector(args, output)
@@ -127,7 +128,7 @@ class MultiProtocolTests(unittest.TestCase):
                 .splitlines()
             ]
             self.assertEqual(
-                [row["window_start"] for row in rows], [0, 300]
+                [row["window_start"] for row in rows], [1.0, 301.0]
             )
             self.assertTrue(
                 all(row["window_seconds"] == 300 for row in rows)
@@ -136,8 +137,8 @@ class MultiProtocolTests(unittest.TestCase):
     def test_training_is_one_capture_wide_time_interval(self):
         with tempfile.TemporaryDirectory() as temp:
             args = arguments()
-            args.training_hours = 1
-            args.window_seconds = 3600
+            args.training_windows = 6
+            args.window_seconds = 600
             output = Outputs(Path(temp), quiet=True)
             detector = MultiProtocolDetector(args, output)
             capture_start = 9 * 3600.0
@@ -203,17 +204,16 @@ class MultiProtocolTests(unittest.TestCase):
                 detector.target_states["192.0.2.20"].trained_windows, 0
             )
 
-    def test_training_cutoff_splits_a_straddling_window(self):
+    def test_training_windows_are_anchored_at_capture_start(self):
         with tempfile.TemporaryDirectory() as temp:
             args = arguments()
-            args.training_hours = 1
-            args.window_seconds = 3600
+            args.training_windows = 6
+            args.window_seconds = 600
             output = Outputs(Path(temp), quiet=True)
             detector = MultiProtocolDetector(args, output)
             capture_start = 9 * 3600.0 + 15 * 60
-            for index, timestamp in enumerate(
-                (capture_start, capture_start + 3600)
-            ):
+            for index in range(7):
+                timestamp = capture_start + index * 600
                 detector.observe(
                     "dns",
                     {
@@ -237,10 +237,12 @@ class MultiProtocolTests(unittest.TestCase):
                 .splitlines()
             ]
             self.assertEqual(
-                [row["phase"] for row in rows], ["training", "detection"]
+                [row["phase"] for row in rows],
+                ["training"] * 6 + ["detection"],
             )
             self.assertEqual(
-                rows[1]["window_start"], capture_start + 3600
+                [row["window_start"] for row in rows],
+                [capture_start + index * 600 for index in range(7)],
             )
 
     def test_importance_rewards_breadth_and_threshold_excess(self):
@@ -351,7 +353,7 @@ class MultiProtocolTests(unittest.TestCase):
                         str(selected),
                         "--normal-dir",
                         str(normal),
-                        "--training-hours",
+                        "--training-windows",
                         "0",
                         "--minimum-points",
                         "1",
