@@ -609,9 +609,22 @@
         const x=xScale(hour,minimum,maximum), y=220-(Math.log1p(value)/Math.log1p(maxVolume))*175;
         return `${x},${y}`;
       }).join(" ");
-      const trainingRows = graphRows.filter(x=>x.phase==="training");
-      const bandWidth = maximum===minimum ? 80 : Math.max(10,Math.min(90,(windowSeconds/(maximum-minimum))*1108));
-      const bands = trainingRows.map(row=>`<rect class="training-band" x="${xScale(rowWindowStart(row),minimum,maximum)-bandWidth/2}" y="25" width="${bandWidth}" height="195"><title>Benign warmup window ${rowWindowStart(row)} · ${row.protocol || "all protocols"}</title></rect>`).join("");
+      const trainingStartRaw = state.result?.summary?.training_start;
+      const trainingEndRaw = state.result?.summary?.training_end;
+      const trainingStart = Number(trainingStartRaw);
+      const trainingEnd = Number(trainingEndRaw);
+      const hasTrainingInterval = trainingStartRaw != null && trainingEndRaw != null &&
+        Number.isFinite(trainingStart) && Number.isFinite(trainingEnd) && trainingEnd > trainingStart;
+      const visibleTrainingStart = Math.max(minimum, trainingStart);
+      const visibleTrainingEnd = Math.min(maximum, trainingEnd);
+      const trainingVisible = hasTrainingInterval &&
+        (maximum === minimum ? trainingStart <= minimum && minimum < trainingEnd : visibleTrainingEnd > visibleTrainingStart);
+      const trainingX1 = maximum === minimum ? 72 : xScale(visibleTrainingStart,minimum,maximum);
+      const trainingX2 = maximum === minimum ? 1180 : xScale(visibleTrainingEnd,minimum,maximum);
+      const trainingBandWidth = Math.max(0, trainingX2-trainingX1);
+      const bands = trainingVisible
+        ? `<rect class="training-band" x="${trainingX1}" y="25" width="${trainingBandWidth}" height="195"><title>Global benign training interval: ${trainingStart} ≤ traffic timestamp &lt; ${trainingEnd}</title></rect>`
+        : "";
       const volumeDots = sortedVolume.map(([hour,value]) => {
         const x=xScale(hour,minimum,maximum), y=220-(Math.log1p(value)/Math.log1p(maxVolume))*175;
         return `<circle cx="${x}" cy="${y}" r="4" fill="#48a8ff"><title>window ${hour}: ${value} flows/records</title></circle>`;
@@ -634,7 +647,9 @@
       const flowCounts=groupedCounts(flowAlerts,"ts"), protocolCounts=groupedCounts(protocolAlerts,"hour_start"), targetCounts=groupedCounts(targetAlerts,"hour_start"), globalCounts=groupedCounts(globalAlerts,"hour_start");
       const lanes = [["Training",45],["Model update",90],["SSL flow alert",135],["Protocol-window",180],["Target-IP",225],["Global",270]];
       const laneLines=lanes.map(([label,y])=>`<text x="8" y="${y+4}">${label}</text><line class="grid" x1="110" y1="${y}" x2="1180" y2="${y}"/>`).join("");
-      const trainingMarks=trainingRows.map(row=>`<rect x="${xScale(rowWindowStart(row),minimum,maximum)-bandWidth/2}" y="34" width="${bandWidth}" height="22" rx="3" fill="#48a8ff"><title>Benign warmup window ${rowWindowStart(row)} · protocol ${row.protocol}</title></rect>`).join("");
+      const trainingMarks = trainingVisible
+        ? `<rect x="${trainingX1}" y="34" width="${trainingBandWidth}" height="22" rx="3" fill="#48a8ff"><title>Global benign training interval: ${trainingStart} ≤ traffic timestamp &lt; ${trainingEnd}</title></rect>`
+        : "";
       const modeColor={training_fit:"#48a8ff",baseline_update:"#35d1d1",drift_update:"#f5b942",suspicious_update:"#ff657a"};
       const updateMarks=updates.map(row=>`<circle cx="${xScale(rowWindowStart(row),minimum,maximum)}" cy="90" r="5" fill="${modeColor[row.mode]||"#91a6be"}"><title>${row.protocol} ${row.mode}, window ${rowWindowStart(row)}, score ${row.score}</title></circle>`).join("");
       const countMarks=(counts,y,color,label)=>[...counts.entries()].map(([hour,count])=>`<circle cx="${xScale(hour,minimum,maximum)}" cy="${y}" r="${Math.min(13,4+Math.sqrt(count)*2)}" fill="${color}" opacity=".9"><title>${count} ${label}, window ${hour}</title></circle>`).join("");
@@ -645,9 +660,12 @@
         ${countMarks(globalCounts,270,"#cf7cff","global anomalies")}
         <text x="1180" y="18" text-anchor="end">Circle size represents count</text></svg>`;
       const scope = `${host||"all source IPs"}${target?` · target ${target}`:""} · ${protocol||"all protocols"} · windows ${minimum}–${maximum}`;
+      const trainingExplanation = hasTrainingInterval
+        ? `The single global benign interval is ${trainingStart} ≤ traffic timestamp &lt; ${trainingEnd}. The blue band is clipped to the time range visible in this graph; it never restarts for a protocol.`
+        : "Explicit benign training is disabled, so no global training band is shown.";
       $("results").innerHTML = `<section class="chart-panel"><div class="chart-head"><h2>Traffic volume and global benign training interval</h2><span>${esc(scope)}</span></div>
-        ${volumeSvg}<div class="legend"><span><i style="background:#48a8ff"></i>Flows/records</span><span><i style="background:rgba(72,168,255,.35)"></i>Benign warmup window</span></div>
-        <div class="help" style="margin-top:10px">Every shaded window contains traffic from the single capture-wide training interval. A protocol that first appears after that interval is not shaded and does not receive delayed training.</div></section>
+        ${volumeSvg}<div class="legend"><span><i style="background:#48a8ff"></i>Flows/records</span><span><i style="background:rgba(72,168,255,.35)"></i>Global benign training interval</span></div>
+        <div class="help" style="margin-top:10px">${trainingExplanation}</div></section>
         <section class="chart-panel"><div class="chart-head"><h2>Training, drift, and anomaly timeline</h2><span>Hover markers for details</span></div>
         ${eventSvg}<div class="legend"><span><i style="background:#48a8ff"></i>Training fit</span><span><i style="background:#35d1d1"></i>Baseline update</span>
         <span><i style="background:#f5b942"></i>Drift update</span><span><i style="background:#ff657a"></i>Suspicious / SSL flow alert</span>
