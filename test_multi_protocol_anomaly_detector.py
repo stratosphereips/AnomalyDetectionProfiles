@@ -14,8 +14,10 @@ from multi_protocol_anomaly_detector import (
     importance_metrics,
     is_ignored_multicast_broadcast,
     main,
+    merge_active_detections,
     source_ip,
 )
+from experimental_pipeline import ModuleResult
 
 
 def arguments():
@@ -47,6 +49,50 @@ def arguments():
 
 
 class MultiProtocolTests(unittest.TestCase):
+    def test_active_addition_preserves_core_and_shadow_adds_nothing(self):
+        core = [{
+            "event": "global_anomaly", "host": "10.0.0.1",
+            "window_start": 300, "hour_start": 300, "global_score": 0.8,
+        }]
+        candidate = {
+            "detection_id": "10.0.0.2@600", "host": "10.0.0.2",
+            "window_start": 600, "score": 0.7, "protocols": ["dns"],
+            "reasons": [{"feature": "test", "score": 4, "threshold": 3}],
+            "responsible_uids": ["D1"], "responsible_fuids": [],
+        }
+        shadow = ModuleResult(
+            module="test_v1", label="Test", mode="shadow", status="ready",
+            candidate_detections=[candidate],
+        )
+        active = ModuleResult(
+            module="test_v1", label="Test", mode="active", status="ready",
+            candidate_detections=[candidate],
+        )
+        shadow_output = merge_active_detections(core, [shadow], 300)
+        active_output = merge_active_detections(core, [active], 300)
+        self.assertEqual(shadow_output, core)
+        self.assertEqual(len(active_output), 2)
+        self.assertEqual(active_output[0]["global_score"], 0.8)
+        self.assertEqual(active_output[1]["decision_sources"], ["test_v1"])
+
+    def test_active_matching_candidate_only_annotates_core(self):
+        core = [{
+            "event": "global_anomaly", "host": "10.0.0.1",
+            "window_start": 300, "hour_start": 300, "global_score": 0.8,
+        }]
+        active = ModuleResult(
+            module="pca_reconstruction_v1", label="PCA", mode="active",
+            status="ready", candidate_detections=[{
+                "detection_id": "10.0.0.1@300", "host": "10.0.0.1",
+                "window_start": 300, "score": 0.2, "protocols": ["conn"],
+                "reasons": [],
+            }],
+        )
+        output = merge_active_detections(core, [active], 300)
+        self.assertEqual(len(output), 1)
+        self.assertEqual(output[0]["global_score"], 0.8)
+        self.assertIn("pca_reconstruction_v1", output[0]["decision_sources"])
+
     def test_off_and_shadow_have_identical_core_outputs(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
