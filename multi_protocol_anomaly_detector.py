@@ -20,6 +20,7 @@ from experimental_pipeline import (
     ExperimentalPipeline,
     NoOpModule,
     PipelineContext,
+    RobustMultivariateModule,
     pipeline_summary,
 )
 from reporting import Reporter
@@ -65,6 +66,11 @@ MULTI_DEFAULTS = {
     "ssl_max_small_anomalies": 2,
     "experimental_noop_mode": "off",
     "experimental_mirror_mode": "shadow",
+    "experimental_multivariate_mode": "shadow",
+    "multivariate_minimum_points": 8,
+    "multivariate_threshold": 3.0,
+    "multivariate_shrinkage": 0.5,
+    "multivariate_history_limit": 64,
 }
 
 # Protocol-specific categorical novelty, numeric volume, and failure signals.
@@ -586,6 +592,7 @@ class MultiProtocolDetector:
         self.protocol_anomalies: list[dict[str, Any]] = []
         self.target_anomalies: list[dict[str, Any]] = []
         self.flow_anomalies: list[dict[str, Any]] = []
+        self.protocol_window_rows: list[dict[str, Any]] = []
         self.records_by_protocol: dict[str, int] = defaultdict(int)
         self.skipped_no_ip: dict[str, int] = defaultdict(int)
         self.ssl_conn_matches = 0
@@ -1739,21 +1746,31 @@ class MultiProtocolDetector:
                         "explanation": explanation,
                     }
                 )
+        data_event = {
+            "event": "protocol_hourly_data",
+            "host": host,
+            "protocol": protocol,
+            "hour_start": bucket.hour,
+            "window_start": bucket.hour,
+            "window_seconds": self.args.window_seconds,
+            "phase": "training" if training else "detection",
+            "trained_hours": state.trained_hours,
+            "features": features,
+            "zscores": zscores,
+        }
+        identifiers = flow_identifier_fields(bucket.flow_records)
+        self.protocol_window_rows.append(
+            {
+                **data_event,
+                "external_baseline": self.force_training,
+                "uids": identifiers["responsible_uids"],
+                "fuids": identifiers["responsible_fuids"],
+            }
+        )
         if not self.suppress_output:
             self.output.write(
                 "data",
-                {
-                "event": "protocol_hourly_data",
-                "host": host,
-                "protocol": protocol,
-                "hour_start": bucket.hour,
-                "window_start": bucket.hour,
-                "window_seconds": self.args.window_seconds,
-                "phase": "training" if training else "detection",
-                "trained_hours": state.trained_hours,
-                "features": features,
-                "zscores": zscores,
-                },
+                data_event,
             )
         score = sum(reason["zscore"] for reason in reasons)
         if reasons:
@@ -2342,6 +2359,32 @@ def parser(
         ),
     )
     result.add_argument(
+        "--experimental-multivariate-mode",
+        choices=("off", "shadow"),
+        default=settings["experimental_multivariate_mode"],
+        help="robust multivariate detector; gated to off or shadow during evaluation",
+    )
+    result.add_argument(
+        "--multivariate-minimum-points",
+        type=int,
+        default=settings["multivariate_minimum_points"],
+    )
+    result.add_argument(
+        "--multivariate-threshold",
+        type=float,
+        default=settings["multivariate_threshold"],
+    )
+    result.add_argument(
+        "--multivariate-shrinkage",
+        type=float,
+        default=settings["multivariate_shrinkage"],
+    )
+    result.add_argument(
+        "--multivariate-history-limit",
+        type=int,
+        default=settings["multivariate_history_limit"],
+    )
+    result.add_argument(
         "-q", "--quiet", action="store_true", default=settings["quiet"]
     )
     result.add_argument(
@@ -2389,6 +2432,10 @@ def main(argv: Optional[list[str]] = None) -> int:
         or args.max_responsible_flows < 1
         or args.uid_corroboration_bonus < 0
         or args.uid_corroboration_bonus_cap < 0
+        or args.multivariate_minimum_points < 3
+        or args.multivariate_threshold <= 0
+        or not 0 <= args.multivariate_shrinkage <= 1
+        or args.multivariate_history_limit < args.multivariate_minimum_points
     ):
         print("error: invalid detector parameters", file=sys.stderr)
         return 2
@@ -2434,6 +2481,7 @@ def main(argv: Optional[list[str]] = None) -> int:
             "sensitivity": args.sensitivity,
             "experimental_noop_mode": args.experimental_noop_mode,
             "experimental_mirror_mode": args.experimental_mirror_mode,
+            "experimental_multivariate_mode": args.experimental_multivariate_mode,
         },
     )
     try:
@@ -2486,11 +2534,21 @@ def main(argv: Optional[list[str]] = None) -> int:
                 }
                 for event in global_events
             ),
+            protocol_windows=tuple(detector.protocol_window_rows),
         )
         module_results = ExperimentalPipeline(
             [
                 (NoOpModule(), args.experimental_noop_mode),
                 (CoreMirrorModule(), args.experimental_mirror_mode),
+                (
+                    RobustMultivariateModule(
+                        minimum_points=args.multivariate_minimum_points,
+                        threshold=args.multivariate_threshold,
+                        shrinkage=args.multivariate_shrinkage,
+                        history_limit=args.multivariate_history_limit,
+                    ),
+                    args.experimental_multivariate_mode,
+                ),
             ]
         ).run(pipeline_context)
         for module_result in module_results:
