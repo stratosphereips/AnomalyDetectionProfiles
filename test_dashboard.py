@@ -47,6 +47,7 @@ class DashboardTests(unittest.TestCase):
         self.assertIn("Protocol-window anomalies", html)
         self.assertIn("window_seconds", dashboard.SETTING_METADATA)
         self.assertIn("normal_dirs", dashboard.SETTING_METADATA)
+        self.assertIn("experimental_noop_mode", dashboard.SETTING_METADATA)
         self.assertIn("uid_corroboration_bonus", dashboard.SETTING_METADATA)
         self.assertIn("ssh", dashboard.DETECTED_LOGS)
         self.assertIn("Target-IP anomalies", html)
@@ -67,6 +68,8 @@ class DashboardTests(unittest.TestCase):
         self.assertIn('["window_seconds","training_hours"', html)
         self.assertIn('key === "window_seconds"', html)
         self.assertIn("setTimeout(runAnalysis, 700)", html)
+        self.assertIn("Experimental pipeline", html)
+        self.assertIn("renderPipelineStatus", html)
         self.assertIn("ignore_multicast_broadcast", dashboard.SETTING_METADATA)
         self.assertEqual(
             dashboard.SETTING_METADATA["ignore_multicast_broadcast"][0],
@@ -95,6 +98,9 @@ class DashboardTests(unittest.TestCase):
         self.assertIn("End-to-end data flow", guide)
         self.assertIn("Five stages of the process", guide)
         self.assertIn("What exactly goes into each anomaly?", guide)
+        self.assertIn("Safe experimental modules", guide)
+        self.assertIn("Off or Shadow → contribution = 0", guide)
+        self.assertIn("noop_v1", guide)
         source = Path(dashboard.__file__).read_text(encoding="utf-8")
         self.assertIn('"/docs/"', source)
 
@@ -149,6 +155,9 @@ class DashboardTests(unittest.TestCase):
                 all(row["window_seconds"] == 300 for row in result["hourly_data"])
             )
             self.assertTrue(result["model_updates"])
+            self.assertEqual(result["module_results"][0]["module"], "noop_v1")
+            self.assertEqual(result["module_results"][0]["mode"], "off")
+            self.assertTrue(result["summary"]["pipeline"]["core"]["locked"])
             self.assertEqual(
                 result["flow_anomalies"],
                 sorted(
@@ -238,7 +247,10 @@ class DashboardTests(unittest.TestCase):
                         "normal_dirs": "/captures/normal",
                         "ignore_multicast_broadcast": False,
                     },
-                    "multi_protocol": {"ssl_flow_threshold": 4.4},
+                    "multi_protocol": {
+                        "ssl_flow_threshold": 4.4,
+                        "experimental_noop_mode": "shadow",
+                    },
                 },
             )
             text = path.read_text(encoding="utf-8")
@@ -247,6 +259,7 @@ class DashboardTests(unittest.TestCase):
             self.assertIn("normal_dirs = /captures/normal", text)
             self.assertIn("ignore_multicast_broadcast = false", text)
             self.assertIn("ssl_flow_threshold = 4.4", text)
+            self.assertIn("experimental_noop_mode = shadow", text)
 
 
 if __name__ == "__main__":
