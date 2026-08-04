@@ -200,6 +200,28 @@ The [computation reference](COMPUTATION_REFERENCE.md#responsible-flow-attributio
 defines selection and explains lower-than-baseline anomalies where missing
 expected flows cannot have a UID.
 
+## Optional anomaly detectors
+
+After the statistical ensemble completes, six independent local detectors can
+run: robust multivariate relationships, PCA reconstruction, Isolation Forest,
+empirical rarity, rolling time-series change, and communication-graph change.
+The first five analyze both source-IP/protocol window features and
+destination-IP window features. The graph detector combines all contacted
+destination IPs for a source across protocols in each window.
+
+Every real detector has an independent dashboard mode:
+
+- **Off:** does not run.
+- **Shadow:** runs and appears in Pipeline comparison, but cannot affect
+  official anomalies.
+- **Active:** may add a candidate as an official anomaly. It cannot remove,
+  weaken, or replace any core anomaly.
+
+If an active candidate matches an existing core `IP@window-start`, its method,
+score, and reasons are attached as additional evidence. If it is module-only,
+it becomes a new global anomaly. A failure in one optional detector is reported
+without stopping the core or the other detectors.
+
 ## Output
 
 The default `multi_protocol_ad_output` directory contains JSON Lines files:
