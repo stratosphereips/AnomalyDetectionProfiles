@@ -10,7 +10,7 @@ class ConfigurationTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             path = Path(temp) / "detector.conf"
             path.write_text(
-                "[common]\ntraining_hours = 8\nsensitivity = 1.5\nignore_multicast_broadcast = false\n"
+                "[common]\ntraining_windows = 8\nsensitivity = 1.5\nignore_multicast_broadcast = false\n"
                 "[output]\ncolor = never\n"
                 "[multi_protocol]\nssl_flow_threshold = 4.2\n",
                 encoding="utf-8",
@@ -19,14 +19,14 @@ class ConfigurationTests(unittest.TestCase):
                 path,
                 "multi_protocol",
                 {
-                    "training_hours": 3,
+                    "training_windows": 3,
                     "sensitivity": 1.0,
                     "ignore_multicast_broadcast": True,
                     "color": "auto",
                     "ssl_flow_threshold": 3.5,
                 },
                 )
-            self.assertEqual(values["training_hours"], 8)
+            self.assertEqual(values["training_windows"], 8)
             self.assertEqual(values["sensitivity"], 1.5)
             self.assertFalse(values["ignore_multicast_broadcast"])
             self.assertEqual(values["ssl_flow_threshold"], 4.2)
