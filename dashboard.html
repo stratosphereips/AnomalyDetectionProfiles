@@ -209,6 +209,7 @@
         <button class="tab" data-tab="flow">SSL flow alerts <span id="flowCount" class="count">0</span></button>
         <button class="tab" data-tab="data">Window data <span id="dataCount" class="count">0</span></button>
         <button class="tab" data-tab="targetdata">Target window data <span id="targetDataCount" class="count">0</span></button>
+        <button class="tab" data-tab="comparison">Pipeline comparison</button>
         <button class="tab" data-tab="log">Run log</button>
         <button class="tab" data-tab="docs">Documentation</button>
       </nav>
@@ -263,7 +264,7 @@
         ["Adaptation", ["drift_alpha","suspicious_alpha","adaptation_score"]],
         ["Global ensemble", ["protocol_score_cap","global_threshold","minimum_protocols","corroboration_bonus","corroboration_bonus_cap","uid_corroboration_bonus","uid_corroboration_bonus_cap"]],
         ["Specialized SSL", ["ssl_hourly_threshold","ssl_flow_threshold","ssl_novelty_threshold","ssl_baseline_alpha","ssl_max_small_anomalies"]],
-        ["Experimental pipeline", ["experimental_noop_mode"]],
+        ["Experimental pipeline", ["experimental_noop_mode","experimental_mirror_mode"]],
         ["Attribution", ["max_responsible_flows"]]
       ];
       const all = {...state.config.common, ...state.config.multi_protocol};
@@ -277,7 +278,7 @@
           const control = document.createElement("div"); control.className = "control";
           const reference = key === "training_hours" ? `<div id="captureReference" class="reference reference-block"></div>` : "";
           const minimum = key === "training_hours" ? 0 : ["window_seconds","minimum_points"].includes(key) ? 1 : null;
-          const field = key === "experimental_noop_mode"
+          const field = key.startsWith("experimental_") && key.endsWith("_mode")
             ? `<select id="cfg-${key}" data-key="${key}">${["off","shadow","active"].map(mode => `<option value="${mode}" ${value === mode ? "selected" : ""}>${mode[0].toUpperCase()+mode.slice(1)}</option>`).join("")}</select>`
             : typeof value === "boolean"
             ? `<select id="cfg-${key}" data-key="${key}"><option value="true" ${value ? "selected" : ""}>Ignore</option><option value="false" ${!value ? "selected" : ""}>Keep</option></select>`
@@ -377,7 +378,11 @@
     function renderPipelineStatus(pipeline) {
       const configuredMode = state.config?.multi_protocol?.experimental_noop_mode || "off";
       const core = pipeline?.core || {label:"Adaptive statistical detector",mode:"active",status:"ready",locked:true,affects_detection:true};
-      const experiments = pipeline?.experimental || [{label:"No-op pipeline check",mode:configuredMode,status:configuredMode === "off" ? "disabled" : "not run",contribution:0,affects_detection:false}];
+      const configuredMirror = state.config?.multi_protocol?.experimental_mirror_mode || "shadow";
+      const experiments = pipeline?.experimental || [
+        {label:"No-op pipeline check",mode:configuredMode,status:configuredMode === "off" ? "disabled" : "not run",contribution:0,affects_detection:false},
+        {label:"Core mirror comparison check",mode:configuredMirror,status:configuredMirror === "off" ? "disabled" : "not run",contribution:0,affects_detection:false}
+      ];
       const cards = [core, ...experiments].map(module => {
         const failed = module.status === "error";
         const modeClass = failed ? "error" : module.mode;
@@ -421,13 +426,39 @@
     function renderResults() {
       if (state.tab === "docs") { $("toolbar").style.display = "none"; renderDocs(); return; }
       if (!state.result) return renderEmpty();
-      $("toolbar").style.display = state.tab === "log" ? "none" : "grid";
+      $("toolbar").style.display = ["log","comparison"].includes(state.tab) ? "none" : "grid";
       if (state.tab === "log") { $("results").innerHTML = `<pre>${esc(state.result.human_log)}</pre>`; return; }
+      if (state.tab === "comparison") { renderPipelineComparison(); return; }
       if (state.tab === "graphs") { renderGraphs(); return; }
       const rows = currentRows();
       if (!rows.length) { $("results").innerHTML = `<div class="empty">No matching records for this view.</div>`; return; }
       $("results").innerHTML = rows.map(renderCard).join("");
       document.querySelectorAll(".card-head").forEach(head => head.addEventListener("click", () => head.parentElement.classList.toggle("open")));
+    }
+
+    function renderPipelineComparison() {
+      const modules = state.result?.module_results || [];
+      if (!modules.length) {
+        $("results").innerHTML = `<div class="empty">No experimental module results were recorded.</div>`;
+        return;
+      }
+      const rows = modules.map(module => {
+        const c = module.comparison || {};
+        const agreement = Number(c.decision_agreement ?? 0) * 100;
+        return `<tr><td><strong>${esc(module.label || module.module)}</strong><br><code>${esc(module.module)}</code></td>
+          <td><span class="mode-pill mode-${esc(module.status === "error" ? "error" : module.mode)}">${esc(module.status === "error" ? "error" : module.mode)}</span></td>
+          <td>${fmt(c.core_count || 0)}</td><td>${fmt(c.module_count || 0)}</td><td>${fmt(c.overlap_count || 0)}</td>
+          <td>${fmt(c.core_only_count || 0)}</td><td>${fmt(c.module_only_count || 0)}</td>
+          <td><strong>${agreement.toFixed(1)}%</strong></td><td>${fmt(c.mean_absolute_score_difference || 0)}</td></tr>`;
+      }).join("");
+      const details = modules.map(module => {
+        const c = module.comparison || {};
+        return `<div class="reason"><strong>${esc(module.label || module.module)} decision IDs</strong>
+          <p>Core only: ${esc((c.core_only_ids || []).join(", ") || "none")}<br>Module only: ${esc((c.module_only_ids || []).join(", ") || "none")}<br>Overlap: ${esc((c.overlap_ids || []).join(", ") || "none")}</p></div>`;
+      }).join("");
+      $("results").innerHTML = `<section class="chart-panel"><div class="chart-head"><h2>Same-run decision comparison</h2><span>Core is a reference, not ground truth</span></div>
+        <div class="help">Each decision ID is source IP + window start. Agreement is intersection divided by union. Score difference is calculated only for overlapping decisions.</div>
+        <table class="flow-table"><thead><tr><th>Module</th><th>Mode</th><th>Core</th><th>Module</th><th>Overlap</th><th>Core only</th><th>Module only</th><th>Agreement</th><th>Mean |score difference|</th></tr></thead><tbody>${rows}</tbody></table>${details}</section>`;
     }
 
     function renderCard(row) {
