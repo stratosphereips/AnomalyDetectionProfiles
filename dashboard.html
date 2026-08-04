@@ -72,6 +72,9 @@
     .mode-active { color: #8ce9be; border-color: #287b5a; background: rgba(78,212,155,.1); }
     .mode-shadow { color: #ffd477; border-color: #8d6a22; background: rgba(245,185,66,.1); }
     .mode-error { color: #ffacb8; border-color: #984052; background: rgba(255,101,122,.1); }
+    .mode-guide { display: grid; grid-template-columns: repeat(3,1fr); gap: 8px; margin: -8px 0 16px; }
+    .mode-guide div { padding: 9px 12px; border: 1px solid var(--line); border-radius: 9px; background: #081522; color: var(--muted); font-size: 11px; }
+    .mode-guide strong { color: var(--text); }
     .tabs { display: flex; gap: 5px; border-bottom: 1px solid var(--line); margin-bottom: 14px; }
     .tab { border: 0; border-radius: 7px 7px 0 0; background: transparent; color: var(--muted); padding: 10px 15px; }
     .tab.active { color: var(--text); background: var(--panel); box-shadow: inset 0 -2px var(--blue); }
@@ -200,6 +203,11 @@
       <div class="statusbar"><span id="statusDot" class="dot"></span><span id="statusText">Ready. Select a Zeek folder and run the analysis.</span></div>
       <div id="errorBox" class="errorbox"></div>
       <section id="summary" class="summary"></section>
+      <section class="mode-guide" aria-label="Pipeline mode definitions">
+        <div><strong>ACTIVE CORE</strong><br>Makes the official anomaly decisions.</div>
+        <div><strong>SHADOW EXPERIMENT</strong><br>Runs and shows candidates, but cannot change official anomalies.</div>
+        <div><strong>OFF</strong><br>Does not run. No candidates and no effect.</div>
+      </section>
       <section id="pipelineStatus" class="pipeline-status"></section>
       <nav class="tabs">
         <button class="tab" data-tab="graphs">Timeline graphs</button>
@@ -278,7 +286,7 @@
           const control = document.createElement("div"); control.className = "control";
           const reference = key === "training_hours" ? `<div id="captureReference" class="reference reference-block"></div>` : "";
           const minimum = key === "training_hours" ? 0 : ["multivariate_minimum_points","multivariate_history_limit"].includes(key) ? 3 : ["window_seconds","minimum_points"].includes(key) ? 1 : null;
-          const allowedModes = key === "experimental_multivariate_mode" ? ["off","shadow"] : ["off","shadow","active"];
+          const allowedModes = ["off","shadow"];
           const field = key.startsWith("experimental_") && key.endsWith("_mode")
             ? `<select id="cfg-${key}" data-key="${key}">${allowedModes.map(mode => `<option value="${mode}" ${value === mode ? "selected" : ""}>${mode[0].toUpperCase()+mode.slice(1)}</option>`).join("")}</select>`
             : typeof value === "boolean"
@@ -446,7 +454,10 @@
         $("results").innerHTML = `<div class="empty">No experimental module results were recorded.</div>`;
         return;
       }
-      const rows = modules.map(module => {
+      const validationIds = new Set(["noop_v1","core_mirror_v1"]);
+      const validationModules = modules.filter(module => validationIds.has(module.module));
+      const detectorModules = modules.filter(module => !validationIds.has(module.module));
+      const comparisonRows = selectedModules => selectedModules.map(module => {
         const c = module.comparison || {};
         const agreement = Number(c.decision_agreement ?? 0) * 100;
         return `<tr><td><strong>${esc(module.label || module.module)}</strong><br><code>${esc(module.module)}</code></td>
@@ -455,17 +466,25 @@
           <td>${fmt(c.core_only_count || 0)}</td><td>${fmt(c.module_only_count || 0)}</td>
           <td><strong>${agreement.toFixed(1)}%</strong></td><td>${fmt(c.mean_absolute_score_difference || 0)}</td></tr>`;
       }).join("");
-      const details = modules.map(module => {
+      const comparisonTable = (title, selectedModules, note) => selectedModules.length ? `<h3>${esc(title)}</h3><div class="help">${esc(note)}</div>
+        <table class="flow-table"><thead><tr><th>Module</th><th>Mode</th><th>Core decisions</th><th>Module candidates</th><th>Both</th><th>Core only</th><th>Module only</th><th>Set agreement</th><th>Mean score difference</th></tr></thead><tbody>${comparisonRows(selectedModules)}</tbody></table>` : "";
+      const details = detectorModules.map(module => {
         const c = module.comparison || {};
-        return `<div class="reason"><strong>${esc(module.label || module.module)} decision IDs</strong>
-          <p>Core only: ${esc((c.core_only_ids || []).join(", ") || "none")}<br>Module only: ${esc((c.module_only_ids || []).join(", ") || "none")}<br>Overlap: ${esc((c.overlap_ids || []).join(", ") || "none")}</p></div>`;
+        return `<div class="reason"><strong>${esc(module.label || module.module)} comparison details</strong>
+          <p>Detected by the official core only: ${esc((c.core_only_ids || []).join(", ") || "none")}<br>Suggested by this Shadow module only: ${esc((c.module_only_ids || []).join(", ") || "none")}<br>Detected by both: ${esc((c.overlap_ids || []).join(", ") || "none")}</p></div>`;
       }).join("");
-      const candidates = modules.flatMap(module => (module.candidate_detections || []).map(candidate => ({module:module.label || module.module,...candidate})));
-      const candidateRows = candidates.map(candidate => `<tr><td>${esc(candidate.module)}</td><td><code>${esc(candidate.detection_id)}</code></td><td>${fmt(candidate.score)}</td><td>${esc((candidate.protocols || []).join(", ") || "multiple")}</td><td>${esc((candidate.reasons || []).map(reason => `${reason.protocol || "all"}: ${reason.feature} score ${fmt(reason.score)} · top ${(reason.top_features || []).map(feature => feature.feature).join(", ")}`).join(" · "))}</td></tr>`).join("");
-      const candidateTable = candidateRows ? `<h3>Module candidate decisions</h3><table class="flow-table"><thead><tr><th>Module</th><th>Decision ID</th><th>Score</th><th>Protocols</th><th>Reasons</th></tr></thead><tbody>${candidateRows}</tbody></table>` : `<div class="help" style="margin-top:12px">No module produced a candidate decision in this run.</div>`;
+      const candidates = detectorModules.flatMap(module => (module.candidate_detections || []).map(candidate => ({module:module.label || module.module,mode:module.mode,...candidate})));
+      const prettyFeature = value => String(value || "").replaceAll("_", " ");
+      const candidateRows = candidates.map(candidate => {
+        const reason = (candidate.reasons || [])[0] || {};
+        const contributors = (reason.top_features || []).map(feature => prettyFeature(feature.feature)).join(", ") || "not available";
+        return `<tr><td>${esc(candidate.host || "unknown")}</td><td>${fmt(candidate.window_start)}</td><td>${esc((candidate.protocols || [reason.protocol]).filter(Boolean).join(", ") || "unknown")}</td><td><strong>${fmt(reason.score)}</strong></td><td>${fmt(reason.threshold)}</td><td>${fmt(candidate.score)}<br><span class="meta">display only—not probability</span></td><td>${esc(contributors)}</td><td><span class="mode-pill mode-shadow">SHADOW · no official effect</span></td></tr>`;
+      }).join("");
+      const candidateTable = candidateRows ? `<h3>Experimental detector candidates</h3><div class="reason"><strong>These are not official anomalies.</strong><p>The Shadow detector found unusual behavior for comparison. Raw joint distance is compared with the threshold. Normalized display score is only a 0–1 visualization and is not probability or confidence.</p></div><table class="flow-table"><thead><tr><th>Source IP</th><th>Window start</th><th>Protocol</th><th>Raw joint distance</th><th>Threshold</th><th>Normalized display score</th><th>Strongest contributing features</th><th>Effect</th></tr></thead><tbody>${candidateRows}</tbody></table>` : `<div class="help" style="margin-top:12px">The experimental detector produced no Shadow candidates in this run.</div>`;
       $("results").innerHTML = `<section class="chart-panel"><div class="chart-head"><h2>Same-run decision comparison</h2><span>Core is a reference, not ground truth</span></div>
-        <div class="help">Each decision ID is source IP + window start. Agreement is intersection divided by union. Score difference is calculated only for overlapping decisions.</div>
-        <table class="flow-table"><thead><tr><th>Module</th><th>Mode</th><th>Core</th><th>Module</th><th>Overlap</th><th>Core only</th><th>Module only</th><th>Agreement</th><th>Mean |score difference|</th></tr></thead><tbody>${rows}</tbody></table>${details}${candidateTable}</section>`;
+        <div class="reason"><strong>How to read this page</strong><p>The official Active core produces real anomalies. A Shadow detector runs beside it and suggests candidates, but contributes exactly zero to official decisions. “Both” means they selected the same source IP and window.</p></div>
+        ${comparisonTable("Experimental detector comparison", detectorModules, "Differences are cases to investigate; the core is a reference, not known truth.")}${details}
+        ${comparisonTable("Pipeline validation checks — not detectors", validationModules, "The no-op and mirror only test the software plumbing. Ignore them when evaluating anomaly detection.")}${candidateTable}</section>`;
     }
 
     function renderCard(row) {
