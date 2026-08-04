@@ -128,36 +128,41 @@ average of the raw values.
 
 ## 🎓 Benign training
 
-`--training-hours N` controls the initial assume-benign period. The name is
-retained for configuration compatibility; `N` counts observed windows.
-
-- The specialized SSL path trains as the SSL model for each source IP.
-- The multi-protocol detector trains independently for each
-  `(source IP, protocol)` pair.
-- For window size \(W\), a window starts at
-  `floor(Zeek ts / W) * W`.
-- Only windows containing records for that model count toward training.
-- Missing windows are not inserted as zero-valued observations.
-- No anomaly is emitted while that specific model is training.
-- After training, statistical detection remains suppressed until the model has
-  at least `minimum_points` prior observations.
-
-For an observed bucket numbered from one, the first bucket eligible for a
-nonzero statistical z-score is therefore:
+`--training-hours N` defines one capture-wide assume-benign time interval. Let
+\(t_0\) be the timestamp of the first analyzed record:
 
 $$
-b_{\mathrm{eligible}} =
-  \max(\mathrm{trainingHours},\mathrm{minimumPoints}) + 1.
+t_{\mathrm{end}} = t_0 + 3600N.
 $$
 
-This eligibility is independent for every source-IP/protocol feature model
-and every target-IP feature model. Eligibility does not guarantee an anomaly;
-the resulting z-score must still reach its effective threshold.
+A selected-capture record is eligible for trusted training exactly when:
+
+$$
+t_0 \le t < t_{\mathrm{end}}.
+$$
+
+- The same \([t_0,t_{\mathrm{end}})\) interval applies to every source IP,
+  protocol, specialized SSL path, and destination IP.
+- The interval is based on elapsed capture time, not the number of observed
+  windows for an individual model.
+- A model first appearing at or after \(t_{\mathrm{end}}\) receives no trusted
+  training values.
+- Records inside the interval are aggregated into window feature values and
+  fitted with Welford's method; no anomaly is emitted for them.
+- If a regular aggregation window crosses \(t_{\mathrm{end}}\), it is split at
+  that timestamp so records at or after the cutoff cannot enter training.
+- Empty windows are not inserted as zero-valued observations.
+
+After the cutoff, a model with fewer than `minimum_points` prior values returns
+z-score zero until it accumulates enough detection-phase EWMA observations.
+Those observations are not trusted training values and do not enter empirical
+threshold calibration. Eligibility does not guarantee an anomaly; the z-score
+must still reach its effective threshold.
 
 ### Zero training hours
 
 `training_hours = 0` skips the explicit assume-benign branch. From the first
-bucket, output records use `phase = "detection"`, and `trained_hours` remains
+window, output records use `phase = "detection"`, and `trained_windows` remains
 zero. This does not eliminate the need for a baseline. While model count is
 below `minimum_points`, `robust_zscore` returns zero, no statistical reason is
 emitted, and the observation updates the model with the ordinary
@@ -167,8 +172,8 @@ subsequent observations use `drift_alpha` while the anomaly score remains zero.
 Because the Welford training branch is never entered, `training_values` stays
 empty and empirical quantile calibration is not performed. Feature decisions
 therefore use the configured fallback threshold. For example, with
-`training_hours = 0` and `minimum_points = 8`, buckets one through eight seed
-the adaptive baseline with z-score zero, and bucket nine is the first eligible
+`training_hours = 0` and `minimum_points = 8`, windows one through eight seed
+the adaptive baseline with z-score zero, and window nine is the first eligible
 for a statistical anomaly.
 
 Specialized SSL novelty does not use `minimum_points`. With zero training, the
@@ -783,7 +788,7 @@ run. The dashboard displays and snapshots those effective configured values.
 
 | Setting | Built-in fallback | Exact role |
 | ------- | ------: | ---------- |
-| `training_hours` | `3` | Legacy key: number of observed windows assumed benign for each independent model; zero selects adaptive cold start |
+| `training_hours` | `3` | Length in elapsed hours of the one capture-wide trusted interval beginning at the first analyzed record; zero selects adaptive cold start |
 | `window_seconds` | `3600` | Width of every aggregation window; `300` selects five-minute windows |
 | `normal_dirs` | empty | Comma-separated known-normal Zeek folders fitted before the selected input |
 | `sensitivity` | `1.0` | Divisor applied to anomaly thresholds and global protocol-count gate |
@@ -879,9 +884,9 @@ absence relative to the baseline is itself the evidence.
 | SSL `anomaly_score` | Sum of anomalous window-feature z-scores |
 | SSL `confidence.score` | Weighted confidence equation bounded to `[0,1]` |
 | `global_score` | Contributions plus corroboration, bounded to `[0,1]` |
-| `phase` | `training` or `detection` for that model |
-| `trained_hours` | Legacy field: completed observed benign windows already fitted |
-| `window_start` | Epoch timestamp at the start of the configured window |
+| `phase` | `training` when the window contains only selected-capture records before the global training cutoff; otherwise `detection` |
+| `trained_windows` | Number of this model's window values fitted from trusted training traffic |
+| `window_start` | Epoch timestamp at the start of the aggregation window; a window crossing the global training cutoff is split and the detection part starts exactly at the cutoff |
 | `window_seconds` | Configured width of the aggregation window |
 | `hour_start` | Compatibility alias for `window_start`; retained for existing consumers |
 | `responsible_flow_count` | Total matching Zeek records before representative-flow truncation |
