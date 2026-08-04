@@ -36,7 +36,7 @@ SKIPPED_LOGS = {
 }
 DEFAULT_CONFIG = Path(__file__).with_name("anomaly_detector.conf")
 MULTI_DEFAULTS = {
-    "training_hours": 3,
+    "training_windows": 3,
     "window_seconds": 3600,
     "normal_dirs": "",
     "sensitivity": 1.0,
@@ -606,8 +606,11 @@ class MultiProtocolDetector:
         if self.force_training or self.capture_start is not None:
             return
         self.capture_start = timestamp
-        self.training_cutoff = timestamp + self.args.training_hours * 3600
-        if self.args.training_hours > 0:
+        self.training_cutoff = (
+            timestamp
+            + self.args.training_windows * self.args.window_seconds
+        )
+        if self.args.training_windows > 0:
             # External baseline models may already be calibrated. The selected
             # capture's trusted prefix adds training values, so calibrate again
             # when that single global interval ends.
@@ -617,17 +620,14 @@ class MultiProtocolDetector:
                 state.calibrated = False
 
     def capture_window_start(self, timestamp: float) -> float:
-        """Return a regular window start, splitting exactly at training end."""
+        """Return a selected-capture window anchored at its first record."""
         self.initialize_capture_clock(timestamp)
-        regular_start = bucket_start(timestamp, self.args.window_seconds)
-        cutoff = self.training_cutoff
-        if (
-            self.args.training_hours > 0
-            and cutoff is not None
-            and regular_start < cutoff <= timestamp
-        ):
-            return cutoff
-        return regular_start
+        if self.force_training or self.capture_start is None:
+            return bucket_start(timestamp, self.args.window_seconds)
+        window_index = math.floor(
+            (timestamp - self.capture_start) / self.args.window_seconds
+        )
+        return self.capture_start + window_index * self.args.window_seconds
 
     def is_training_time(self, timestamp: float) -> bool:
         """Whether a selected-capture timestamp is in the global prefix."""
@@ -635,7 +635,7 @@ class MultiProtocolDetector:
             return True
         self.initialize_capture_clock(timestamp)
         return bool(
-            self.args.training_hours > 0
+            self.args.training_windows > 0
             and self.training_cutoff is not None
             and timestamp < self.training_cutoff
         )
@@ -2218,13 +2218,13 @@ def parser(
         "-o", "--output-dir", type=Path, default=settings["output_dir"]
     )
     result.add_argument(
-        "--training-hours",
+        "--training-windows",
         type=int,
-        default=settings["training_hours"],
+        default=settings["training_windows"],
         help=(
-            "capture-wide benign prefix duration in hours, measured from the "
-            "first analyzed record; 0 skips explicit training but still "
-            "requires --minimum-points"
+            "number of aggregation windows in the capture-wide benign prefix; "
+            "duration is this value times --window-seconds; 0 skips explicit "
+            "training but still requires --minimum-points"
         ),
     )
     result.add_argument(
@@ -2433,7 +2433,7 @@ def main(argv: Optional[list[str]] = None) -> int:
             print(f"error: not a directory: {normal_dir}", file=sys.stderr)
             return 2
     if (
-        args.training_hours < 0
+        args.training_windows < 0
         or args.window_seconds < 1
         or args.minimum_points < 1
         or args.protocol_score_cap <= 0
@@ -2464,7 +2464,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         "MULTI-PROTOCOL ANOMALY DETECTOR",
         f"input={args.zeek_dir} protocols={len(logs)} "
         f"config={args.config} sensitivity={args.sensitivity} "
-        f"training_hours={args.training_hours} "
+        f"training_windows={args.training_windows} "
         f"window_seconds={args.window_seconds} "
         f"normal_dirs={len(args.normal_dirs)}",
     )
@@ -2484,8 +2484,10 @@ def main(argv: Optional[list[str]] = None) -> int:
             "protocols": [protocol for protocol, _ in logs],
             "skipped_non_ip_logs": skipped,
             "configuration": str(args.config),
-            "training_hours": args.training_hours,
-            "training_duration_seconds": args.training_hours * 3600,
+            "training_windows": args.training_windows,
+            "training_duration_seconds": (
+                args.training_windows * args.window_seconds
+            ),
             "window_seconds": args.window_seconds,
             "normal_dirs": [str(path) for path in args.normal_dirs],
             "sensitivity": args.sensitivity,
@@ -2533,7 +2535,7 @@ def main(argv: Optional[list[str]] = None) -> int:
                     "event": "training_interval",
                     "capture_start": detector.capture_start,
                     "training_cutoff": detector.training_cutoff,
-                    "training_hours": args.training_hours,
+                    "training_windows": args.training_windows,
                 },
             )
         process_observations(detector, observations)
@@ -2579,7 +2581,7 @@ def main(argv: Optional[list[str]] = None) -> int:
             )
         summary = {
             "window_seconds": args.window_seconds,
-            "training_hours": args.training_hours,
+            "training_windows": args.training_windows,
             "training_start": detector.capture_start,
             "training_end": detector.training_cutoff,
             "external_baseline_records": baseline_records,
@@ -2634,7 +2636,7 @@ def main(argv: Optional[list[str]] = None) -> int:
             ("Source hosts", summary["hosts"]),
             ("Target IPs", summary["targets"]),
             ("Window seconds", args.window_seconds),
-            ("Training hours", args.training_hours),
+            ("Training windows", args.training_windows),
             ("External baseline records", summary["external_baseline_records"]),
             ("Sensitivity", args.sensitivity),
             ("Protocol anomalies", summary["protocol_anomalies"]),
