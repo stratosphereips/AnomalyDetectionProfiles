@@ -49,6 +49,8 @@ class DashboardTests(unittest.TestCase):
         self.assertIn("normal_dirs", dashboard.SETTING_METADATA)
         self.assertIn("experimental_noop_mode", dashboard.SETTING_METADATA)
         self.assertIn("experimental_mirror_mode", dashboard.SETTING_METADATA)
+        self.assertIn("experimental_multivariate_mode", dashboard.SETTING_METADATA)
+        self.assertIn("multivariate_threshold", dashboard.SETTING_METADATA)
         self.assertIn("uid_corroboration_bonus", dashboard.SETTING_METADATA)
         self.assertIn("ssh", dashboard.DETECTED_LOGS)
         self.assertIn("Target-IP anomalies", html)
@@ -107,6 +109,9 @@ class DashboardTests(unittest.TestCase):
         self.assertIn("Same-run comparison", guide)
         self.assertIn("core_mirror_v1", guide)
         self.assertIn("decision agreement = |overlap|", guide)
+        self.assertIn("Robust multivariate feature-relationship detector", guide)
+        self.assertIn("D² = δᵀ (C*)⁻¹ δ", guide)
+        self.assertIn("Shadow-only evaluation", guide)
         source = Path(dashboard.__file__).read_text(encoding="utf-8")
         self.assertIn('"/docs/"', source)
 
@@ -170,6 +175,12 @@ class DashboardTests(unittest.TestCase):
                 result["module_results"][1]["comparison"]["decision_agreement"],
                 1.0,
             )
+            self.assertEqual(
+                result["module_results"][2]["module"],
+                "robust_multivariate_v1",
+            )
+            self.assertEqual(result["module_results"][2]["mode"], "shadow")
+            self.assertFalse(result["module_results"][2]["affects_detection"])
             self.assertTrue(result["summary"]["pipeline"]["core"]["locked"])
             self.assertEqual(
                 result["flow_anomalies"],
